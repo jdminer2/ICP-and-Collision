@@ -1,0 +1,23 @@
+{
+  "name": "icp2",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.html",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "rollup -c ./rollup.config.js",
+    "watch": "rollup -w -c ./rollup.config.js",
+    "start": "react-scripts start"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@rollup/plugin-node-resolve": "^15.0.1",
+    "gulp": "^4.0.2",
+    "web-ifc": "^0.0.39"
+  },
+  "devDependencies": {
+    "@open-wc/building-rollup": "^2.2.1",
+    "rollup": "^2.79.1"
+  }
+}
