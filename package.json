@@ -15,7 +15,7 @@
     "browser",
     "tool"
   ],
-  "main": "./build/potree/potree.js",
+  "main": ".potree/build/potree/potree.js",
   "scripts": {
     "start": "gulp watch",
     "build": "gulp build pack",

@@ -9,46 +9,46 @@ const concat = require('gulp-concat');
 const connect = require('gulp-connect');
 const {watch} = gulp;
 
-const {createExamplesPage} = require("./src/tools/create_potree_page");
-const {createGithubPage} = require("./src/tools/create_github_page");
-const {createIconsPage} = require("./src/tools/create_icons_page");
+const {createExamplesPage} = require("./potree/src/tools/create_potree_page");
+const {createGithubPage} = require("./potree/src/tools/create_github_page");
+const {createIconsPage} = require("./potree/src/tools/create_icons_page");
 
 
 let paths = {
 	laslaz: [
-		"build/workers/laslaz-worker.js",
-		"build/workers/lasdecoder-worker.js",
+		"potree/build/workers/laslaz-worker.js",
+		"potree/build/workers/lasdecoder-worker.js",
 	],
 	html: [
-		"src/viewer/potree.css",
-		"src/viewer/sidebar.html",
-		"src/viewer/profile.html"
+		"potree/src/viewer/potree.css",
+		"potree/src/viewer/sidebar.html",
+		"potree/src/viewer/profile.html"
 	],
 	resources: [
-		"resources/**/*"
+		"potree/resources/**/*"
 	]
 };
 
 let workers = {
 	"LASLAZWorker": [
-		"libs/plasio/workers/laz-perf.js",
-		"libs/plasio/workers/laz-loader-worker.js"
+		"potree/libs/plasio/workers/laz-perf.js",
+		"potree/libs/plasio/workers/laz-loader-worker.js"
 	],
 	"LASDecoderWorker": [
-		"src/workers/LASDecoderWorker.js"
+		"potree/src/workers/LASDecoderWorker.js"
 	],
 	"EptLaszipDecoderWorker": [
-		"src/workers/EptLaszipDecoderWorker.js"
+		"potree/src/workers/EptLaszipDecoderWorker.js"
 	],
 	"EptBinaryDecoderWorker": [
-		"libs/ept/ParseBuffer.js",
-		"src/workers/EptBinaryDecoderWorker.js"
+		"potree/libs/ept/ParseBuffer.js",
+		"potree/src/workers/EptBinaryDecoderWorker.js"
 	],
 	"EptZstandardDecoderWorker": [
-		"src/workers/EptZstandardDecoder_preamble.js",
-		'libs/zstd-codec/bundle.js',
-		"libs/ept/ParseBuffer.js",
-		"src/workers/EptZstandardDecoderWorker.js"
+		"potree/src/workers/EptZstandardDecoder_preamble.js",
+		'potree/libs/zstd-codec/bundle.js',
+		"potree/libs/ept/ParseBuffer.js",
+		"potree/src/workers/EptZstandardDecoderWorker.js"
 	]
 };
 
@@ -56,22 +56,22 @@ let workers = {
 // in order for the lazy loader to find them, independent of the path of the html file,
 // we package them together with potree
 let lazyLibs = {
-	"geopackage": "libs/geopackage",
-	"sql.js": "libs/sql.js"
+	"geopackage": "potree/libs/geopackage",
+	"sql.js": "potree/libs/sql.js"
 };
 
 let shaders = [
-	"src/materials/shaders/pointcloud.vs",
-	"src/materials/shaders/pointcloud.fs",
-	"src/materials/shaders/pointcloud_sm.vs",
-	"src/materials/shaders/pointcloud_sm.fs",
-	"src/materials/shaders/normalize.vs",
-	"src/materials/shaders/normalize.fs",
-	"src/materials/shaders/normalize_and_edl.fs",
-	"src/materials/shaders/edl.vs",
-	"src/materials/shaders/edl.fs",
-	"src/materials/shaders/blur.vs",
-	"src/materials/shaders/blur.fs",
+	"potree/src/materials/shaders/pointcloud.vs",
+	"potree/src/materials/shaders/pointcloud.fs",
+	"potree/src/materials/shaders/pointcloud_sm.vs",
+	"potree/src/materials/shaders/pointcloud_sm.fs",
+	"potree/src/materials/shaders/normalize.vs",
+	"potree/src/materials/shaders/normalize.fs",
+	"potree/src/materials/shaders/normalize_and_edl.fs",
+	"potree/src/materials/shaders/edl.vs",
+	"potree/src/materials/shaders/edl.fs",
+	"potree/src/materials/shaders/blur.vs",
+	"potree/src/materials/shaders/blur.fs",
 ];
 
 // For development, it is now possible to use 'gulp webserver'
@@ -111,7 +111,7 @@ gulp.task("workers", async function(done){
 
 		gulp.src(workers[workerName])
 			.pipe(concat(`${workerName}.js`))
-			.pipe(gulp.dest('build/potree/workers'));
+			.pipe(gulp.dest('potree/build/potree/workers'));
 	}
 
 	done();
@@ -124,7 +124,7 @@ gulp.task("lazylibs", async function(done){
 		const libpath = lazyLibs[libname];
 
 		gulp.src([`${libpath}/**/*`])
-			.pipe(gulp.dest(`build/potree/lazylibs/${libname}`));
+			.pipe(gulp.dest(`potree/build/potree/lazylibs/${libname}`));
 	}
 
 	done();
@@ -150,10 +150,10 @@ gulp.task("shaders", async function(){
 
 	const content = components.join("\n\n");
 
-	const targetPath = `./build/shaders/shaders.js`;
+	const targetPath = `./potree/build/shaders/shaders.js`;
 
-	if(!fs.existsSync("build/shaders")){
-		fs.mkdirSync("build/shaders");
+	if(!fs.existsSync("potree/build/shaders")){
+		fs.mkdirSync("potree/build/shaders");
 	}
 	fs.writeFileSync(targetPath, content, {flag: "w"});
 });
@@ -162,11 +162,11 @@ gulp.task('build',
 	gulp.series(
 		gulp.parallel("workers", "lazylibs", "shaders", "icons_viewer", "examples_page"),
 		async function(done){
-			gulp.src(paths.html).pipe(gulp.dest('build/potree'));
+			gulp.src(paths.html).pipe(gulp.dest('potree/build/potree'));
 
-			gulp.src(paths.resources).pipe(gulp.dest('build/potree/resources'));
+			gulp.src(paths.resources).pipe(gulp.dest('potree/build/potree/resources'));
 
-			gulp.src(["LICENSE"]).pipe(gulp.dest('build/potree'));
+			gulp.src(["LICENSE"]).pipe(gulp.dest('potree/build/potree'));
 
 			done();
 		}
@@ -183,15 +183,15 @@ gulp.task("pack", async function(){
 gulp.task('watch', gulp.parallel("build", "pack", "webserver", async function() {
 
 	let watchlist = [
-		'src/**/*.js',
-		'src/**/**/*.js',
-		'src/**/*.css',
-		'src/**/*.html',
-		'src/**/*.vs',
-		'src/**/*.fs',
-		'resources/**/*',
-		'examples//**/*.json',
-		'!resources/icons/index.html',
+		'potree/src/**/*.js',
+		'potree/src/**/**/*.js',
+		'potree/src/**/*.css',
+		'potree/src/**/*.html',
+		'potree/src/**/*.vs',
+		'potree/src/**/*.fs',
+		'potree/resources/**/*',
+		'potree/examples//**/*.json',
+		'!potree/resources/icons/index.html',
 	];
 
 	watch(watchlist, gulp.series("build", "pack"));
