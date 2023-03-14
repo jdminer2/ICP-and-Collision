@@ -1,1 +1,0 @@
-put las here. (too big for git). put hierarchy.bin, octree.bin, and metadata.json outside.

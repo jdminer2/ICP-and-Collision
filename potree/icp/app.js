@@ -21,6 +21,6 @@ ifcapi.Init().then(()=>{
         modelID = ifcapi.OpenModel(ifcData);
         let lines = ifcapi.GetLineIDsWithType(modelID,IFCCARTESIANPOINT);
         for(let i = 0; i < lines.size(); i++)
-            ;//console.log(ifcapi.GetLine(modelID,lines.get(i)))
+            console.log(ifcapi.GetLine(modelID,lines.get(i)));
     });
 });

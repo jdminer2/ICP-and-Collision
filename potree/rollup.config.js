@@ -1,3 +1,4 @@
+import resolve from "@rollup/plugin-node-resolve";
 export default [
 	{
 		input: 'src/Potree.js',
@@ -32,5 +33,14 @@ export default [
 			name: 'Potree',
 			sourcemap: false
 		}
+	},{
+		input: 'icp/app.js',
+		output: [
+			{
+			format: 'es',
+			file: 'icp/bundle.js',
+			},
+		],
+		plugins: [resolve()],
 	}
 ]
