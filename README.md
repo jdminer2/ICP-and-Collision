@@ -13,10 +13,6 @@
 
 # Getting Started
 
-### Add files to render
-
-See new readme
-
 ### Install on your PC
 
 Install [node.js](http://nodejs.org/)
