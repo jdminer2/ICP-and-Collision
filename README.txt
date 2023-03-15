@@ -13,6 +13,6 @@ To run it:
 
 1. Add the above files.
 2. Open the the project in terminal and navigate to the potree folder.
-> npm i
+> npm install
 > npm start
 3. Open localhost:1234/icp
