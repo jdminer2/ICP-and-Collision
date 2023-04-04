@@ -1,40 +1,38 @@
 import {IfcAPI, IFCCARTESIANPOINT} from "web-ifc/web-ifc-api";
 import {IFCLoader} from "web-ifc-three/IFCLoader"
-import {Object3D, AmbientLight, DirectionalLight} from "three";
+import {AmbientLight, DirectionalLight, Matrix4, Object3D} from "three";
+import { MultiScaleICP } from "./icp";
+import {Matrix} from "ml-matrix"
 
 let potreeFilePath = "./0611/metadata.json"
 let ifcjsFilePath = "mccormick-0416-research.ifc"
 
-function activate() {
-    // Potree
+async function activate() {
+    // Potree loading and rendering
     window.viewer = new Potree.Viewer(document.getElementById("potree_render_area"));
-
     viewer.setEDLEnabled(true);
     viewer.setFOV(60);
     viewer.setPointBudget(1_000_000);
     viewer.loadSettingsFromURL();
-
     viewer.setDescription("Loading Octree of LAS files");
-
     viewer.loadGUI(() => {
         viewer.setLanguage('en');
         $("#menu_appearance").next().show();
         //viewer.toggleSidebar();
     });
-
-    Potree.loadPointCloud(potreeFilePath, "pointCloud", function(e){
-        viewer.scene.addPointCloud(e.pointcloud);
+    let pointcloud;
+    await Potree.loadPointCloud(potreeFilePath, "pointCloud").then(e => {
+        pointcloud=e.pointcloud;
+        viewer.scene.addPointCloud(pointcloud);
         
-        let material = e.pointcloud.material;
+        let material = pointcloud.material;
         material.pointSizeType = Potree.PointSizeType.ADAPTIVE;
         viewer.fitToScreen();
         viewer.setControls(viewer.fpControls);
-
-        console.log(e);
     });
 
 
-    // IFCJS
+    // IFCJS loading
     let modelID = 0;
 
     function getIfcFile(url) {
@@ -50,18 +48,16 @@ function activate() {
     }
 
     const ifcapi = new IfcAPI();
-    ifcapi.Init().then(()=>{
-        getIfcFile(ifcjsFilePath).then((ifcData) => {
-            modelID = ifcapi.OpenModel(ifcData);
-            let lines = ifcapi.GetLineIDsWithType(modelID,IFCCARTESIANPOINT);
-            
-            let cartesianPoints = [];
-            for(let i = 0; i < lines.size(); i++)
-                cartesianPoints.push(ifcapi.GetLine(modelID,lines.get(i)));
-            console.log("IFCJS CARTESIANPOINTS: ", cartesianPoints);
-        });
+    let ifcPoints = [];
+    await ifcapi.Init().then(()=>getIfcFile(ifcjsFilePath)).then((ifcData) => {
+        modelID = ifcapi.OpenModel(ifcData);
+        let lines = ifcapi.GetLineIDsWithType(modelID,IFCCARTESIANPOINT);
+        
+        for(let i = 0; i < lines.size(); i++)
+            ifcPoints.push(ifcapi.GetLine(modelID,lines.get(i)));
     });
 
+    // IFCJS rendering
     let ifcLoader = new IFCLoader();
     ifcLoader.load(ifcjsFilePath, (ifcModel) => {
         // Add appropriately-sized ifc model
@@ -85,6 +81,14 @@ function activate() {
         ifcjsContainer.add(directionalLight);
         ifcjsContainer.add(directionalLight.target);
     });
+
+    MultiScaleICP(ifcPoints,pointcloud,new Matrix([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]])).then(transformationMatrix => {
+        let flattenedTransMatrix = transformationMatrix.data.flatMap(row=>[...row])
+        let THREETransMatrix = new Matrix4().set(...flattenedTransMatrix)
+        pointcloud.applyMatrix4(THREETransMatrix.invert())
+        console.log(...transformationMatrix.data)
+    });
+
     window.removeEventListener("load",activate);
 }
 window.addEventListener("load",activate);
