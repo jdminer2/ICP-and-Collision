@@ -40,8 +40,9 @@ Please cite our work if you use Open3D.
 "
  */
 
-import {Matrix} from "ml-matrix"
-import { getAllPoints } from "./potreeAccess";
+import {Matrix} from "ml-matrix";
+import { getPointsFromModel } from "./ifcAccess";
+import { getPointsFromPointcloud } from "./potreeAccess";
 import { getSimilarityTransformation } from "./umeyama";
 
 // Tweakable
@@ -50,34 +51,37 @@ const MAX_DEPTH = 5
 
 // Tweakable
 // At each depth:
-    // max_iterations: how many iterations can be done at this depth at most.
-    // convergence_fitness and convergence_rmse: if change in fitness and rmse both get under their convergence thresholds,
-    // then this depth has basically stopped changing, so move to the next depth. 
-    // max_neighbor_distance: how far to search for nearby neighbors to points.
-function getThresholds(depth) {
-    let max_iterations = 1**(MAX_DEPTH-depth+1);
-    
-    let convergence_fitness = 0;
-    let convergence_rmse = 0;
-    
-    let max_neighbor_distance = Infinity;
-
-    return [max_iterations,convergence_fitness,convergence_rmse,max_neighbor_distance];
+    // convergenceFitness and convergenceRMSE: if change in fitness and rmse both get under their convergence thresholds,
+    // then the transformation has basically stopped changing at this depth, so move to the next depth. 
+    // numIterations: how many iterations can be done at this depth at most.
+    // maxNeighborDistance: how far to search for nearby neighbors to points.
+    // ifcPointCount: how many points to sample from the IFC mesh
+    // There is no adjustable threshold for sampling from the other file. All points from the current depth are taken.
+function getThresholds(depth,targetPointcloud) {
+    return {
+        convergenceFitness:0,
+        convergenceRMSE:0,
+        numIterations:200*2**(MAX_DEPTH-depth+1),
+        maxNeighborDistance:Infinity*targetPointcloud.pcoGeometry.spacing/2**depth,
+        ifcPointCount:200*2**depth
+    };
 }
 
 
 
 // The main function
-export async function MultiScaleICP(sourceArray, targetPointcloud, initialEstimate) {
+export async function MultiScaleICP(sourceModel, targetPointcloud, initialEstimate) {
     let result = {transformation:initialEstimate, correspondences:[], fitness:0, inlier_rmse:0}
 
-    // Apply initial estimate to the source points
-    let sourceMatrix = initialEstimate.mmul(convertIFCArrayToMatrix(sourceArray))
+    let sourcePoints,targetPoints, thresholds
 
-    for(i = 0; i <= MAX_DEPTH; i++)
-        [result,sourceMatrix] = await DoSingleScaleICPIterations(sourceMatrix,targetPointcloud,i,result)
-
-    await UpdateRegistrationResult(sourceMatrix,targetPointcloud,getThresholds(MAX_DEPTH)[3],MAX_DEPTH,result)
+    for(let depth = 0; depth <= MAX_DEPTH; depth++) {
+        thresholds = getThresholds(depth,targetPointcloud);
+        sourcePoints = getPointsFromModel(sourceModel,thresholds.ifcPointCount)
+        targetPoints = await getPointsFromPointcloud(targetPointcloud,depth);
+        [result,sourceMatrix] = DoSingleScaleICPIterations(sourcePoints,targetPoints,thresholds,result)
+        console.log("Iteration",depth,result.inlier_rmse,result.fitness,result.transformation)
+    }
     return result.transformation
 }
 
@@ -101,15 +105,16 @@ function validateInput(source, target, initialEstimate){
 }
 */
 
-async function DoSingleScaleICPIterations(sourceMatrix,targetPointcloud,depth,result) {
-    let [max_iterations,convergence_fitness,convergence_rmse,max_neighbor_distance] = getThresholds(depth)
-    
-    for(let i = 0; i < max_iterations; i++) {
+function DoSingleScaleICPIterations(sourcePoints,targetPoints,thresholds,result) {
+    // Turn sourcePoints into a transformable matrix with the current transformation applied to it.
+    let sourceMatrix = result.transformation.mmul(convertPointsArrayToMatrix(sourcePoints))
+
+    for(let i = 0; i < thresholds.numIterations; i++) {
         prev_fitness = result.fitness
         prev_inlier_rmse = result.inlier_rmse
         
         // Finds correspondences, also computes fitness and inlier_rmse of the matchup.
-        await UpdateRegistrationResult(sourceMatrix,targetPointcloud,max_neighbor_distance,depth,result)
+        UpdateRegistrationResult(sourceMatrix,targetPoints,thresholds.maxNeighborDistance,result)
         // Maybe perfect fit, or maybe none of the source points found neighbors, or maybe the cloud shrank to a single point.
         // In all cases, further progress is impossible.
         if(result.inlier_rmse == 0)
@@ -117,23 +122,26 @@ async function DoSingleScaleICPIterations(sourceMatrix,targetPointcloud,depth,re
         
         // Compute and apply transformation
         let update = ComputeTransformationPointToPoint(result.correspondences)
+        if(isNaN(update.data[0][0]) || update.data[0][0] === Infinity || update.data[0][0] === -Infinity)
+          return [result,sourceMatrix]
         result.transformation = update.mmul(result.transformation)
         sourceMatrix = update.mmul(sourceMatrix)
 
-        // Check thresholds to determine if transformation stopped improving at this depth.
-        if(i != 0 && Math.abs(prev_fitness - result.fitness) < convergence_fitness 
-            && Math.abs(prev_inlier_rmse - result.inlier_rmse) < convergence_rmse)
+        // Check convergence thresholds to determine if transformation stopped improving at this depth.
+        if(i != 0 && Math.abs(prev_fitness - result.fitness) < thresholds.convergenceFitness 
+            && Math.abs(prev_inlier_rmse - result.inlier_rmse) < thresholds.convergenceRMSE)
                 break
     }
+    UpdateRegistrationResult(sourceMatrix,targetPoints,thresholds.maxNeighborDistance,result)
     return [result,sourceMatrix]
 }
 
 // Packages results of MatchNeighbors in a result object.
 // fitness: % of the source points that found neighbors.
 // inlier_rmse: average squared distance between source points that found neighbors, and their neighbors.
-async function UpdateRegistrationResult(sourceMatrix,targetPointcloud,max_neighbor_distance,depth,result) {
-    let squaredError
-    [result.correspondences,squaredError] = await MatchNeighbors(sourceMatrix,targetPointcloud,max_neighbor_distance,depth)
+function UpdateRegistrationResult(sourceMatrix,targetPoints,maxNeighborDistance,result) {
+    let squaredError;
+    [result.correspondences,squaredError] = MatchNeighbors(sourceMatrix,targetPoints,maxNeighborDistance)
     let numCorrespondences = result.correspondences[0].length
   
     result.fitness = numCorrespondences/sourceMatrix.columns
@@ -141,9 +149,7 @@ async function UpdateRegistrationResult(sourceMatrix,targetPointcloud,max_neighb
   }
   
   // Finds neighbors for each source point in the target points. Also calculates sum of squared error, and number of successful matchings.
-  async function MatchNeighbors(sourceMatrix, targetPointcloud, max_neighbor_distance, depth) {
-    // Spacing is the minimum distance between points in the node.
-    let targetPoints = await getAllPoints(targetPointcloud,depth)
+  function MatchNeighbors(sourceMatrix, targetPoints, maxNeighborDistance) {
     let squaredError = 0
     let correspondences = [[],[]]
     for(let c = 0; c < sourceMatrix.columns; c++) {
@@ -155,9 +161,13 @@ async function UpdateRegistrationResult(sourceMatrix,targetPointcloud,max_neighb
             for(let i = 0; i < sourcePoint.length - 1; i++)
                 squared_distance += (sourcePoint[i]-targetPoint[i])**2
             if(squared_distance < closestNeighbor.squared_distance)
+            //
+            // Second place neighbor to fix scale problem?
+            //
+            //
                 closestNeighbor = {point:targetPoint,squared_distance:squared_distance}
         })
-        if(closestNeighbor.squared_distance <= max_neighbor_distance**2) {
+        if(closestNeighbor.squared_distance <= maxNeighborDistance**2) {
             correspondences[0].push(sourcePoint)
             correspondences[1].push(closestNeighbor.point)
             squaredError += closestNeighbor.squared_distance
@@ -166,12 +176,12 @@ async function UpdateRegistrationResult(sourceMatrix,targetPointcloud,max_neighb
     return [correspondences,squaredError]
   }
 
-function convertIFCArrayToMatrix(points) {
+function convertPointsArrayToMatrix(points) {
     let numPoints = points.length;
-    let dims = points[0].Coordinates.length;
+    let dims = points[0].length;
     let matrix = new Matrix(dims,numPoints);
     for(let c = 0; c < numPoints; c++)
-        matrix.setColumn(c,points[c].Coordinates.map(x=>x.value))
+        matrix.setColumn(c,points[c])
     // This bottom row filled with 1s is needed for 4x4 transformation matrices to be applicable to the array.
     matrix.addRow(matrix.rows,Matrix.ones(1,numPoints));
     return matrix;

@@ -33,7 +33,7 @@ import {NodeLoader} from "../src/modules/loader/2.0/OctreeLoader"
   }
 
   // Resolves with all points in the pointcloud from nodes to the specified depth.
-  export async function getAllPoints(pointcloud,depth) {
+  export async function getPointsFromPointcloud(pointcloud,depth) {
     let nodes = await getAllNodes(pointcloud,depth)
     let points = [];
     let position = pointcloud.position
