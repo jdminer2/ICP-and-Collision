@@ -176,16 +176,6 @@ export class InputHandler extends EventDispatcher {
 	onKeyDown (e) {
 		if (this.logMessages) console.log(this.constructor.name + ': onKeyDown');
 
-		// DELETE
-		if (e.keyCode === KeyCodes.DELETE && this.selection.length > 0) {
-			this.dispatchEvent({
-				type: 'delete',
-				selection: this.selection
-			});
-
-			this.deselectAll();
-		}
-
 		this.dispatchEvent({
 			type: 'keydown',
 			keyCode: e.keyCode,
@@ -364,32 +354,6 @@ export class InputHandler extends EventDispatcher {
 			}
 
 			this.drag = null;
-		}
-
-		if(!consumed){
-			if (e.button === THREE.MOUSE.LEFT) {
-				if (noMovement) {
-					let selectable = this.hoveredElements
-						.find(el => el.object._listeners && el.object._listeners['select']);
-
-					if (selectable) {
-						selectable = selectable.object;
-
-						if (this.isSelected(selectable)) {
-							this.selection
-								.filter(e => e !== selectable)
-								.forEach(e => this.toggleSelection(e));
-						} else {
-							this.deselectAll();
-							this.toggleSelection(selectable);
-						}
-					} else {
-						this.deselectAll();
-					}
-				}
-			} else if ((e.button === THREE.MOUSE.RIGHT) && noMovement) {
-				this.deselectAll();
-			}
 		}
 	}
 

@@ -60,15 +60,21 @@ SOFTWARE.
  * - svd refers to the SVD given by U, D and V
  */
 
+import {determinant,Matrix,SVD} from "ml-matrix"
+
 /**
- * Transform a tuple of source points to match a tuple of target points
+ * Compute transformation to transform a tuple of source points to match a tuple of target points
  * following equation 40, 41 and 42 of umeyama_1991.
  *
  * This function expects two Matrix instances of the same shape
  * (m, n), where n is the number of points and m is the number of dimensions.
  * This is the shape used by umeyama_1991. m and n can take any positive value.
+ * 
+ * Added weight function to treat certain columns as being present multiple times, or fractional numbers.
+ * For floating point, works best if weights are near 1.
+ * Weights array should be length n.
  *
- * The returned matrix contains the transformed points.
+ * The returned matrix would transform fromPoints to toPoints.
  *
  * @param {!Matrix} fromPoints - the source points {x_1, ..., x_n}.
  * @param {!Matrix} toPoints - the target points {y_1, ..., y_n}.
@@ -76,17 +82,17 @@ SOFTWARE.
  *   reflected to achieve a better mean squared error.
  * @returns {Matrix}
  */
-import {determinant,Matrix,SVD} from "ml-matrix"
-
 export function getSimilarityTransformation(fromPoints,
                                      toPoints,
+                                     weights,
                                      allowReflection = false) {
     const dimensions = fromPoints.rows;
 
     // 1. Compute the rotation.
     const covarianceMatrix = getSimilarityTransformationCovariance(
         fromPoints,
-        toPoints);
+        toPoints,
+        weights);
 
     const {
         svd,
@@ -104,20 +110,19 @@ export function getSimilarityTransformation(fromPoints,
     const summator = (sum, elem) => {
         return sum + elem;
     };
-    const fromVariance = fromPoints
-        .variance('row', {unbiased: false})
-        .reduce(summator);
+
+    const toVariance = weightedVarianceByRow(toPoints,weights); // fromPoints was incorrect and is now replaced with toPoints
 
     let trace = 0;
     for (let dimension = 0; dimension < dimensions; dimension++) {
         const mirrorEntry = mirrorIdentityForSolution[dimension];
         trace += svd.diagonal[dimension] * mirrorEntry;
     }
-    const scale = trace / fromVariance;
+    const scale = toVariance / trace; // Bugfix
 
     // 3. Compute the translation.
-    const fromMean = Matrix.columnVector(fromPoints.mean('row'));
-    const toMean = Matrix.columnVector(toPoints.mean('row'));
+    const fromMean = Matrix.columnVector(weightedMeanByRow(fromPoints,weights))
+    const toMean = Matrix.columnVector(weightedMeanByRow(toPoints,weights))
     const translation = Matrix.sub(
         toMean,
         Matrix.mul(rotation.mmul(fromMean), scale));
@@ -136,7 +141,8 @@ export function getSimilarityTransformation(fromPoints,
     transformationMatrix.addRow(dimensions,Matrix.zeros(1,dimensions + 1))
     transformationMatrix.set(dimensions,dimensions,1)
 
-    return transformationMatrix;
+    // Scale is useful to return also
+    return [transformationMatrix,scale];
 }
 
 /**
@@ -213,16 +219,23 @@ function getSimilarityTransformationErrorBound(fromPoints,
  * This function expects two Matrix instances of the same shape
  * (m, n), where n is the number of points and m is the number of dimensions.
  * This is the shape used by umeyama_1991. m and n can take any positive value.
+ * 
+ * Note: I have added weighting to this function. It acts as if there are weights[i] copies of each point.
  *
  * @param {!Matrix} fromPoints - the source points {x_1, ..., x_n}.
  * @param {!Matrix} toPoints - the target points {y_1, ..., y_n}.
  * @returns {Matrix}
  */
-function getSimilarityTransformationCovariance(fromPoints, toPoints) {
+function getSimilarityTransformationCovariance(fromPoints, toPoints, weights) {
     const dimensions = fromPoints.rows;
     const numPoints = fromPoints.columns;
-    const fromMean = Matrix.columnVector(fromPoints.mean('row'));
-    const toMean = Matrix.columnVector(toPoints.mean('row'));
+
+    let totalWeight = 0;
+    for(let j = 0; j < weights.length; ++j)
+        totalWeight += weights[j];
+
+    const fromMean = Matrix.columnVector(weightedMeanByRow(fromPoints,weights));
+    const toMean = Matrix.columnVector(weightedMeanByRow(toPoints,weights));
 
     const covariance = Matrix.zeros(dimensions, dimensions);
 
@@ -232,7 +245,7 @@ function getSimilarityTransformationCovariance(fromPoints, toPoints) {
         const outer = Matrix.sub(toPoint, toMean)
             .mmul(Matrix.sub(fromPoint, fromMean).transpose());
 
-        covariance.addM(Matrix.div(outer, numPoints));
+        covariance.addM(Matrix.div(outer.mulS(weights[pointIndex]), totalWeight));
     }
 
     return covariance;
@@ -288,4 +301,47 @@ function getSimilarityTransformationSvdWithMirrorIdentities(covarianceMatrix,
         mirrorIdentityForErrorBound: mirrorIdentityForErrorBound,
         mirrorIdentityForSolution: mirrorIdentityForSolution
     }
+}
+
+
+
+
+
+
+function weightedVarianceByRow(matrix, weights) {
+    let totalWeight = 0;
+    for(let j = 0; j < matrix.columns; ++j)
+        totalWeight += weights[j];
+
+    const mean = weightedMeanByRow(matrix, weights);
+
+    let variance = 0;
+    for (let i = 0; i < matrix.rows; i++) {
+        let sum1 = 0;
+        let sum2 = 0;
+        for (let j = 0; j < matrix.columns; j++) {
+            const x = matrix.get(i, j) - mean[i];
+            sum1 += x * weights[j];
+            sum2 += x * x * weights[j];
+        }
+        variance += (sum2 - (sum1 * sum1) / totalWeight) / totalWeight;
+    }
+    return variance;
+}
+
+
+function weightedMeanByRow(matrix,weights) {
+    let totalWeight = 0;
+    for(let j = 0; j < matrix.columns; ++j)
+        totalWeight += weights[j];
+
+    const mean = [];
+    for (let i = 0; i < matrix.rows; ++i) {
+        let val = 0;
+        for (let j = 0; j < matrix.columns; ++j)
+            val += matrix.get(i, j) * weights[j];
+        val /= totalWeight;
+        mean.push(val)
+    }
+    return mean;
 }

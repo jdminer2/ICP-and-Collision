@@ -47,6 +47,7 @@ export class Sidebar{
 	init(){
 
 		this.initAccordion();
+		this.initICPSettings();
 		this.initAppearance();
 		this.initToolbar();
 		this.initScene();
@@ -1270,6 +1271,96 @@ export class Sidebar{
 		// $("#menu_tools").next().show()
 	}
 
+	initICPSettings(){
+		$('#schemPosXInput').val(0);
+		$('#schemPosXInput').on("input", (e)=>this.viewer.setSchemParam("posX", e.target.value));
+		$('#schemPosYInput').val(0);
+		$('#schemPosYInput').on("input", (e)=>this.viewer.setSchemParam("posY", e.target.value));
+		$('#schemPosZInput').val(0);
+		$('#schemPosZInput').on("input", (e)=>this.viewer.setSchemParam("posZ", e.target.value));
+		$('#schemRotXInput').val(0);
+		$('#schemRotXInput').on("input", (e)=>this.viewer.setSchemParam("rotX", e.target.value));
+		$('#schemRotYInput').val(0);
+		$('#schemRotYInput').on("input", (e)=>this.viewer.setSchemParam("rotY", e.target.value));
+		$('#schemRotZInput').val(0);
+		$('#schemRotZInput').on("input", (e)=>this.viewer.setSchemParam("rotZ", e.target.value));
+		$('#schemScaleInput').val(1);
+		$('#schemScaleInput').on("input", (e)=>this.viewer.setSchemParam("scale", e.target.value));
+
+		this.viewer.addEventListener('schematic_param_changed', (event) => {
+			$('#schemPosXInput').val({value: this.viewer.getSchemParams["posX"]});
+			$('#schemPosYInput').val({value: this.viewer.getSchemParams["posY"]});
+			$('#schemPosZInput').val({value: this.viewer.getSchemParams["posZ"]});
+			$('#schemRotXInput').val({value: this.viewer.getSchemParams["rotX"]});
+			$('#schemRotYInput').val({value: this.viewer.getSchemParams["rotY"]});
+			$('#schemRotZInput').val({value: this.viewer.getSchemParams["rotZ"]});
+			$('#schemScaleInput').val({value: this.viewer.getSchemParams["scale"]});
+		});
+
+		$('#pclPosXInput').val(0);
+		$('#pclPosXInput').on("input", (e)=>this.viewer.setPclParam("posX", e.target.value));
+		$('#pclPosYInput').val(0);
+		$('#pclPosYInput').on("input", (e)=>this.viewer.setPclParam("posY", e.target.value));
+		$('#pclPosZInput').val(0);
+		$('#pclPosZInput').on("input", (e)=>this.viewer.setPclParam("posZ", e.target.value));
+		$('#pclRotXInput').val(0);
+		$('#pclRotXInput').on("input", (e)=>this.viewer.setPclParam("rotX", e.target.value));
+		$('#pclRotYInput').val(0);
+		$('#pclRotYInput').on("input", (e)=>this.viewer.setPclParam("rotY", e.target.value));
+		$('#pclRotZInput').val(0);
+		$('#pclRotZInput').on("input", (e)=>this.viewer.setPclParam("rotZ", e.target.value));
+		$('#pclScaleInput').val(1);
+		$('#pclScaleInput').on("input", (e)=>this.viewer.setPclParam("scale", e.target.value));
+
+		this.viewer.addEventListener('pointcloud_param_changed', (event) => {
+			$('#pclPosXInput').val({value: this.viewer.getPclParams["posX"]});
+			$('#pclPosYInput').val({value: this.viewer.getPclParams["posY"]});
+			$('#pclPosZInput').val({value: this.viewer.getPclParams["posZ"]});
+			$('#pclRotXInput').val({value: this.viewer.getPclParams["rotX"]});
+			$('#pclRotYInput').val({value: this.viewer.getPclParams["rotY"]});
+			$('#pclRotZInput').val({value: this.viewer.getPclParams["rotZ"]});
+			$('#pclScaleInput').val({value: this.viewer.getPclParams["scale"]});
+		});
+
+		$('#pclCropPosXInput').val(0);
+		$('#pclCropPosXInput').on("input", (e)=>this.viewer.setPclCropParam("posX", e.target.value));
+		$('#pclCropPosYInput').val(0);
+		$('#pclCropPosYInput').on("input", (e)=>this.viewer.setPclCropParam("posY", e.target.value));
+		$('#pclCropPosZInput').val(0);
+		$('#pclCropPosZInput').on("input", (e)=>this.viewer.setPclCropParam("posZ", e.target.value));
+		$('#pclCropRotXInput').val(0);
+		$('#pclCropRotXInput').on("input", (e)=>this.viewer.setPclCropParam("rotX", e.target.value));
+		$('#pclCropRotYInput').val(0);
+		$('#pclCropRotYInput').on("input", (e)=>this.viewer.setPclCropParam("rotY", e.target.value));
+		$('#pclCropRotZInput').val(0);
+		$('#pclCropRotZInput').on("input", (e)=>this.viewer.setPclCropParam("rotZ", e.target.value));
+		$('#pclCropScaleInput').val(1);
+		$('#pclCropScaleInput').on("input", (e)=>this.viewer.setPclCropParam("scale", e.target.value));
+
+		this.viewer.addEventListener('pointcloud_crop_param_changed', (event) => {
+			$('#pclCropPosXInput').val({value: this.viewer.getPclCropParams["posX"]});
+			$('#pclCropPosYInput').val({value: this.viewer.getPclCropParams["posY"]});
+			$('#pclCropPosZInput').val({value: this.viewer.getPclCropParams["posZ"]});
+			$('#pclCropRotXInput').val({value: this.viewer.getPclCropParams["rotX"]});
+			$('#pclCropRotYInput').val({value: this.viewer.getPclCropParams["rotY"]});
+			$('#pclCropRotZInput').val({value: this.viewer.getPclCropParams["rotZ"]});
+			$('#pclCropScaleInput').val({value: this.viewer.getPclCropParams["scale"]});
+		});
+
+		let selectControlBox = $('#selectControlBox');
+		selectControlBox.selectgroup();
+		selectControlBox.find("input").click( (e) => {
+			this.viewer.setControlBox(e.target.value);
+		});
+		$('input[name=selectControlBox][value=none]').trigger("click");
+
+		this.viewer.addEventListener('control_box_changed', (event) => {
+			$("input[name=selectControlBox][value='" + this.viewer.getControlBox() + "']").prop('checked', true);
+		});
+		
+		$('#runICPButton').on("click", (e)=>console.log(e));
+	}
+
 	initAppearance(){
 
 		const sldPointBudget = this.dom.find('#sldPointBudget');
@@ -1306,13 +1397,21 @@ export class Sidebar{
 			slide: (event, ui) => { this.viewer.setEDLStrength(ui.value); }
 		});
 
-		$('#sldEDLOpacity').slider({
+		$('#sldPointcloudOpacity').slider({
 			value: this.viewer.getEDLOpacity(),
 			min: 0,
 			max: 1,
 			step: 0.01,
 			slide: (event, ui) => { this.viewer.setEDLOpacity(ui.value); }
 		});
+
+		$('#sldSchematicOpacity').slider({
+			value: this.viewer.getSchematicOpacity(),
+			min: 0,
+			max: 1,
+			step: 0.01,
+			slide: (event, ui) => { this.viewer.setSchematicOpacity(ui.value); }
+		})
 
 		this.viewer.addEventListener('point_budget_changed', (event) => {
 			$('#lblPointBudget')[0].innerHTML = Utils.addCommas(this.viewer.getPointBudget());
@@ -1337,6 +1436,18 @@ export class Sidebar{
 			$('#lblEDLStrength')[0].innerHTML = this.viewer.getEDLStrength().toFixed(1);
 			$('#sldEDLStrength').slider({value: this.viewer.getEDLStrength()});
 		});
+
+		this.viewer.addEventListener('edl_opacity_changed', (event) => {
+			$('#lblPointcloudOpacity')[0].innerHTML = this.viewer.getEDLOpacity();
+			$('#sldPointcloudOpacity').slider({value: this.viewer.getEDLOpacity()});
+		});
+		$('#lblPointcloudOpacity')[0].innerHTML = this.viewer.getEDLOpacity();
+
+		this.viewer.addEventListener('schematic_opacity_changed', (event) => {
+			$('#lblSchematicOpacity')[0].innerHTML = this.viewer.getSchematicOpacity();
+			$('#sldSchematicOpacity').slider({value: this.viewer.getSchematicOpacity()});
+		});
+		$('#lblSchematicOpacity')[0].innerHTML = this.viewer.getSchematicOpacity();
 
 		this.viewer.addEventListener('background_changed', (event) => {
 			$("input[name=background][value='" + this.viewer.getBackground() + "']").prop('checked', true);

@@ -1,4 +1,8 @@
-
+<style>
+	.icpInput{
+		max-width: 60px;
+	}
+</style>
 <div id="sidebar_root" class="">
 	<div id="sidebar_header">
 		<span id="potree_branding" class="potree_sidebar_brand">
@@ -16,20 +20,85 @@
 
 	<div id="potree_menu" class="accordion">
 
+		<!-- ICP -->
+		<h3 id="menu_icp"><span>ICP</span></h3>
+		<div>
+			<ul class="pv-menu-list">				
+				<div class="divider"><span>Move Schematic</span></div>
+				<li>Position</li>
+				<li>
+					X: <input id="schemPosXInput" class="icpInput"/>
+					Y: <input id="schemPosYInput" class="icpInput"/>
+					Z: <input id="schemPosZInput" class="icpInput"/>
+				</li>
+				<li>Rotation</li>
+				<li>
+					X: <input id="schemRotXInput" class="icpInput"/>
+					Y: <input id="schemRotYInput" class="icpInput"/>
+					Z: <input id="schemRotZInput" class="icpInput"/>
+				</li>
+				<li><span>Scale: </span><input id="schemScaleInput" class="icpInput"/></li>
+				
+				<div class="divider"><span>Move Pointcloud</span></div>
+				<li>Position</li>
+				<li>
+					X: <input id="pclPosXInput" class="icpInput"/>
+					Y: <input id="pclPosYInput" class="icpInput"/>
+					Z: <input id="pclPosZInput" class="icpInput"/>
+				</li>
+				<li>Rotation</li>
+				<li>
+					X: <input id="pclRotXInput" class="icpInput"/>
+					Y: <input id="pclRotYInput" class="icpInput"/>
+					Z: <input id="pclRotZInput" class="icpInput"/>
+				</li>
+				<li><span>Scale: </span><input id="pclScaleInput" class="icpInput"/></li>
+
+				<div class="divider"><span>Crop Pointcloud</span></div>
+				<li>Position</li>
+				<li>
+					X: <input id="pclCropPosXInput" class="icpInput"/>
+					Y: <input id="pclCropPosYInput" class="icpInput"/>
+					Z: <input id="pclCropPosZInput" class="icpInput"/>
+				</li>
+				<li>Rotation</li>
+				<li>
+					X: <input id="pclCropRotXInput" class="icpInput"/>
+					Y: <input id="pclCropRotYInput" class="icpInput"/>
+					Z: <input id="pclCropRotZInput" class="icpInput"/>
+				</li>
+				<li><span>Scale: </span><input id="pclCropScaleInput" class="icpInput"/></li>
+				
+				<div class="divider"><span>ICP Algorithm</span></div>
+				<li style="text-align: center">
+					<label id="runICPButton" class="ui-button ui-state-default" style="width: 50%; padding: .4em .1em; margin: 0px;
+					 border: 1px solid black; border-radius: 4px;">Run ICP</label>
+				</li>
+
+				<selectgroup id="selectControlBox">
+					<option id="selectControlBox_none" value="none">None</option>
+					<option id="selectControlBox_schematic" value="Schem Bounding Box">Schematic</option>
+					<option id="selectControlBox_pointcloud" value="Pcl Bounding Box">Pointcloud</option>
+					<option id="selectControlBox_croppingBox" value="Pcl Cropping Box">Cropping Box</option>
+				</selectgroup>
+			</ul>
+		</div>
 		
 		<!-- APPEARANCE -->
 		<h3 id="menu_appearance"><span data-i18n="tb.rendering_opt"></span></h3>
 		<div>
 			<ul class="pv-menu-list">
-				<li><span data-i18n="appearance.nb_max_pts"></span>: <span id="lblPointBudget"></span> <div id="sldPointBudget"></div></li>
-				<li><span data-i18n="appearance.field_view"></span>: <span id="lblFOV"></span><div id="sldFOV"></div></li>
+				<div class="divider"><span>Camera Movement Speed</span></div>
+				<li><span data-i18n="appearance.move_speed"></span>: <span id="lblMoveSpeed"></span><div id="sldMoveSpeed"></div></li>
 
-				<div class="divider"><span>Eye-Dome-Lighting</span></div>
-
-				<li><label><input type="checkbox" id="chkEDLEnabled"/><span data-i18n="appearance.edl_enable"></span></label></li>
-				<li><span data-i18n="appearance.edl_radius"></span>: <span id="lblEDLRadius"></span><div id="sldEDLRadius"></div></li>
-				<li><span data-i18n="appearance.edl_strength"></span>: <span id="lblEDLStrength"></span><div id="sldEDLStrength"></div></li>
-				<li><span data-i18n="appearance.edl_opacity"></span>: <span id="lblEDLOpacity"></span><div id="sldEDLOpacity"></div></li>
+				<div style="display: none;" class="divider"><span>Eye-Dome-Lighting</span></div>
+				<div class="divider"><span>Pointcloud Opacity</span></div>
+				
+				<li style="display: none;"><label><input type="checkbox" id="chkEDLEnabled"/><span data-i18n="appearance.edl_enable"></span></label></li>
+				<li style="display: none;"><span data-i18n="appearance.edl_radius"></span>: <span id="lblEDLRadius"></span><div id="sldEDLRadius"></div></li>
+				<li style="display: none;"><span data-i18n="appearance.edl_strength"></span>: <span id="lblEDLStrength"></span><div id="sldEDLStrength"></div></li>
+				<li>Pointcloud <span data-i18n="appearance.edl_opacity"></span>: <span id="lblPointcloudOpacity"></span><div id="sldPointcloudOpacity"></div></li>
+				<li>Schematic <span data-i18n="appearance.edl_opacity"></span>: <span id="lblSchematicOpacity"></span><div id="sldSchematicOpacity"></div></li>
 				
 				<div class="divider"><span>Background</span></div>
 
@@ -44,7 +113,6 @@
 				</li>
 
 				<div class="divider"><span>Other</span></div>
-
 				<li>
 					<selectgroup id="splat_quality_options">
 						<option id="splat_quality_options_standard" value="standard">Standard</option>
@@ -52,9 +120,11 @@
 					</selectgroup>
 				</li>
 				
+				<li><span data-i18n="appearance.nb_max_pts"></span>: <span id="lblPointBudget"></span> <div id="sldPointBudget"></div></li>
 				<li><span data-i18n="appearance.min_node_size"></span>: <span id="lblMinNodeSize"></span><div id="sldMinNodeSize"></div></li>
-				<li><label><input id="show_bounding_box" type="checkbox" /><span data-i18n="appearance.box"></span></label></li>
-				<li><label><input id="set_freeze" type="checkbox" /><span data-i18n="appearance.freeze"></span></label></li>
+				<li><span data-i18n="appearance.field_view"></span>: <span id="lblFOV"></span><div id="sldFOV"></div></li>
+				<li style="display: none;"><label><input id="show_bounding_box" type="checkbox" /><span data-i18n="appearance.box"></span></label></li>
+				<li style="display: none;"><label><input id="set_freeze" type="checkbox" /><span data-i18n="appearance.freeze"></span></label></li>
 			</ul>
 			
 		</div>
@@ -63,11 +133,11 @@
 		<h3 id="menu_tools"><span data-i18n="tb.tools_opt"></span></h3>
 		<div class="pv-menu-list">
 
-			<div class="divider"><span>Measurement</span></div>
+			<div style="display: none;" class="divider"><span>Measurement</span></div>
 
-			<li id="tools"></li>
+			<li style="display: none;" id="tools"></li>
 
-			<li>
+			<li style="display: none;">
 				<selectgroup id="measurement_options_show">
 					<option id="measurement_options_show_yes" value="SHOW">Show</option>
 					<option id="measurement_options_show_no" value="HIDE">Hide</option>
@@ -97,13 +167,11 @@
 			<div class="divider"><span>Navigation</span></div>
 
 			<li id="navigation"></li>
-
-			<li><span data-i18n="appearance.move_speed"></span>: <span id="lblMoveSpeed"></span><div id="sldMoveSpeed"></div></li>
 		</div>
 
 		<!-- SCENE -->
-		<h3 id="menu_scene"><span data-i18n="tb.scene_opt"></span></h3>
-		<div class="pv-menu-list">
+		<h3 style="display: none;" id="menu_scene"><span data-i18n="tb.scene_opt"></span></h3>
+		<div style="display: none;" class="pv-menu-list">
 
 			<div id="scene_export"></div>
 
@@ -117,8 +185,8 @@
 		</div>
 
 		<!-- Classification -->
-		<h3 id="menu_filters"><span data-i18n="tb.filters_opt"></span></h3>
-		<div>
+		<h3 style="display: none;" id="menu_filters"><span data-i18n="tb.filters_opt"></span></h3>
+		<div style="display: none;">
 
 			<div class="divider"><span>Classification</span></div>
 
@@ -164,7 +232,7 @@
 
 			</div>
 		</div>
-		
+
 		<!-- ABOUT -->
 		<h3 id="menu_about"><span data-i18n="tb.about_opt"></span></h3>
 		<div>

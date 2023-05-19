@@ -127,6 +127,18 @@ export class Viewer extends EventDispatcher{
 
 		this.server = null;
 
+		this.schemParams = 	 {posX: 0, posY: 0, posZ: 0,
+							  rotX: 0, rotY: 0, rotZ: 0,
+							  scale: 1};
+		this.pclParams = 	 {posX: 0, posY: 0, posZ: 0,
+						  	  rotX: 0, rotY: 0, rotZ: 0,
+						  	  scale: 1};
+		this.pclCropParams = {posX: 0, posY: 0, posZ: 0,
+							  rotX: 0, rotY: 0, rotZ: 0,
+							  scale: 1};
+
+		this.controlBox = "none";
+
 		this.fov = 60;
 		this.isFlipYZ = false;
 		this.useDEMCollisions = false;
@@ -135,6 +147,7 @@ export class Viewer extends EventDispatcher{
 		this.edlStrength = 1.0;
 		this.edlRadius = 1.4;
 		this.edlOpacity = 1.0;
+		this.schematicOpacity = 1.0;
 		this.useEDL = false;
 		this.description = "";
 
@@ -299,6 +312,7 @@ export class Viewer extends EventDispatcher{
 			this.setEDLRadius(1.4);
 			this.setEDLStrength(0.4);
 			this.setEDLOpacity(1.0);
+			this.setSchematicOpacity(1.0);
 			this.setClipTask(ClipTask.HIGHLIGHT);
 			this.setClipMethod(ClipMethod.INSIDE_ANY);
 			this.setPointBudget(1*1000*1000);
@@ -646,6 +660,75 @@ export class Viewer extends EventDispatcher{
 	getEDLOpacity () {
 		return this.edlOpacity;
 	};
+
+	setSchematicOpacity (value) {
+		if (this.schematicOpacity !== value) {
+			this.schematicOpacity = value;
+			this.dispatchEvent({'type': 'schematic_opacity_changed', 'viewer': this});
+		}
+	};
+
+	getSchematicOpacity () {
+		return this.schematicOpacity;
+	};
+
+	setSchemParam (param, value) {
+		if(this.schemParams[param] !== value) {
+			this.schemParams[param] = value;
+			this.dispatchEvent({'type': 'schematic_param_changed', 'viewer': this});
+		}
+	}
+
+	getSchemParam (param) {
+		return this.schemParams[param];
+	}
+
+	setPclParam (param, value) {
+		if(this.pclParams[param] !== value) {
+			this.pclParams[param] = value;
+			this.dispatchEvent({'type': 'pointcloud_param_changed', 'viewer': this});
+		}
+	}
+
+	getPclParam (param) {
+		return this.pclParams[param];
+	}
+
+	setPclCropParam (param, value) {
+		if(this.pclCropParams[param] !== value) {
+			this.pclCropParams[param] = value;
+			this.dispatchEvent({'type': 'pointcloud_crop_param_changed', 'viewer': this});
+		}
+	}
+
+	getPclCropParam (param) {
+		return this.pclCropParams[param];
+	}
+	
+	setControlBox(controlBox){
+		if (this.controlBox === controlBox) {
+			return;
+		}
+
+		this.inputHandler.deselectAll();
+		this.inputHandler.scene.volumes.forEach(volume => {
+			if(volume.name === controlBox)
+				this.inputHandler.toggleSelection(volume);
+			if(volume.name === "Pcl Cropping Box")
+				volume.frame.material.color.set(
+					(volume.name === controlBox) ? "#ffff00" : "#000000"
+				)
+		})
+
+		this.controlBox = controlBox;
+		this.dispatchEvent({'type': 'control_box_changed', 'viewer': this});
+	}
+
+	getControlBox () {
+		return this.controlBox;
+	}
+
+
 
 	setFOV (value) {
 		if (this.fov !== value) {

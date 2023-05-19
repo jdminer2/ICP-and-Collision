@@ -1,25 +1,85 @@
-import {IfcAPI, IFCCARTESIANPOINT, IFCPRODUCTDEFINITIONSHAPE} from "web-ifc/web-ifc-api";
 import {IFCLoader} from "web-ifc-three/IFCLoader"
-import {AmbientLight, DirectionalLight, Matrix4, Object3D} from "three";
+import {AmbientLight, DirectionalLight, Matrix4, Object3D, Box3, NormalBlending} from "three";
 import { MultiScaleICP } from "./icp";
 import {Matrix} from "ml-matrix"
+import { VolumeTool } from "../src/utils/VolumeTool";
+import { BoxVolume } from "../src/utils/Volume";
+import { PointCloudOctree, PointCloudOctreeNode } from "../src/PointCloudOctree";
 
 let potreeFilePath = "./0611/metadata.json";;
 let ifcFilePath = "mccormick-0416-research.ifc";
 let initialGuess = new Matrix([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]);
 
 async function run() {
-    let scene = loadViewer()
+    loadViewer()
     let pointcloud = await loadPotree(potreeFilePath)
-    loadIFC(ifcFilePath,scene,(ifcModel)=>{
-        MultiScaleICP(ifcModel,pointcloud,initialGuess).then(transformationMatrix=>
+    loadIFC(ifcFilePath,async (ifcModel)=>{
+        console.log(ifcModel)
+        console.log(pointcloud);
+        console.log(viewer)
+        ifcModel.material.forEach(material=>{
+            material.transparent = true;
+            material.opacity = 0.5;
+        });
+        await waitForDef(()=>ifcModel?.geometry?.boundingSphere)
+        let potreeBounds = BoundPotree(ifcModel,pointcloud);
+        let node = new PointCloudOctreeNode();
+        node.geometryNode = pointcloud.root.geometryNode;
+        node.sceneNode = pointcloud.root.sceneNode;
+        console.log(node.getPointsInBox(potreeBounds))
+        MultiScaleICP(ifcFilePath,ifcModel,pointcloud,initialGuess,5).then(transformationMatrix=>
             applyICPResult(pointcloud,transformationMatrix)
         );
-        console.log(scene)
     });
     window.removeEventListener("load",run);
 }
 window.addEventListener("load",run);
+
+function BoundPotree(ifcModel,pointcloud) {
+    let schemBoundingBox = new Box3();
+    ifcModel.geometry.boundingSphere.getBoundingBox(schemBoundingBox);
+    schemBoundingBox.min.y = -1 * schemBoundingBox.max.z;
+    schemBoundingBox.max.y = -1 * schemBoundingBox.min.z;
+    schemBoundingBox.min.z = schemBoundingBox.min.y;
+    schemBoundingBox.max.z = schemBoundingBox.max.y;
+
+    let schemPosition = ifcModel.position;
+    let pclBoundingBox = pointcloud.boundingBox;
+    let pclPosition = pointcloud.position;
+
+    function scaleCoords(boundingBox){
+        return ['x','y','z'].map(dim=>
+            boundingBox.max[dim] - boundingBox.min[dim]
+        )
+    }
+    function positionCoords(boundingBox,position){
+        return ['x','y','z'].map(dim=>
+            (boundingBox.max[dim] + boundingBox.min[dim])/2 + position[dim]
+        )
+    }
+
+    let schemVolume = new Potree.BoxVolume();
+    schemVolume.name = "Schem Bounding Box";
+    schemVolume.scale.set(...scaleCoords(schemBoundingBox));
+    schemVolume.position.set(...positionCoords(schemBoundingBox,schemPosition))
+    schemVolume.visible = false;
+
+    let pclVolume = new Potree.BoxVolume();
+    pclVolume.name = "Pcl Bounding Box";
+    pclVolume.scale.set(...scaleCoords(pclBoundingBox));
+    pclVolume.position.set(...positionCoords(pclBoundingBox,pclPosition));
+    pclVolume.visible = false;
+
+    let clipVolume  = new Potree.BoxVolume();
+    clipVolume.name = "Pcl Cropping Box";
+    clipVolume.scale.set(...scaleCoords(pclBoundingBox));
+    clipVolume.position.set(...positionCoords(pclBoundingBox,pclPosition));
+    clipVolume.clip = true;
+
+    viewer.scene.addVolume(schemVolume);
+    viewer.scene.addVolume(pclVolume);
+    viewer.scene.addVolume(clipVolume);
+}
 
 
 function loadViewer() {
@@ -32,7 +92,10 @@ function loadViewer() {
     viewer.setDescription("Loading Octree of LAS files");
     viewer.loadGUI(() => {
         viewer.setLanguage('en');
+        $("#menu_icp").next().show();
         $("#menu_appearance").next().show();
+        $("#menu_tools").next().show();
+        viewer.toggleSidebar();
     });
     return viewer.scene.scene
 }
@@ -44,7 +107,6 @@ async function loadPotree(filePath) {
         
         let material = pointcloud.material;
         material.pointSizeType = Potree.PointSizeType.ADAPTIVE;
-        viewer.setEDLOpacity(0.5)
         viewer.fitToScreen();
         viewer.setControls(viewer.fpControls);
 
@@ -52,13 +114,13 @@ async function loadPotree(filePath) {
     });
 }
 
-async function loadIFC(filePath,scene,onLoad) {
+async function loadIFC(filePath,onLoad) {
     let ifcLoader = new IFCLoader();
     ifcLoader.load(filePath, (ifcModel) => {
         // Add appropriately-sized ifc model
         let ifcjsContainer = new Object3D();
         ifcjsContainer.rotation.x = Math.PI/2;
-        scene.add(ifcjsContainer);
+        viewer.scene.scene.add(ifcjsContainer);
         
         ifcjsContainer.add(ifcModel);
 
@@ -81,3 +143,12 @@ function applyICPResult(pointcloud,transformationMatrix) {
     let THREETransMatrix = new Matrix4().set(...flattenedTransMatrix)
     pointcloud.applyMatrix4(THREETransMatrix.invert())
 }
+
+async function waitForDef(getter) {
+    let val = getter();
+    while(val === undefined || val === null) {
+      await new Promise(e=>setTimeout(e,0));
+      val = getter();
+    }
+    return val
+  }
