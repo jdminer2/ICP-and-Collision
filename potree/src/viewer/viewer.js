@@ -127,15 +127,15 @@ export class Viewer extends EventDispatcher{
 
 		this.server = null;
 
-		this.schemParams = 	 {posX: 0, posY: 0, posZ: 0,
-							  rotX: 0, rotY: 0, rotZ: 0,
-							  scale: 1};
-		this.pclParams = 	 {posX: 0, posY: 0, posZ: 0,
-						  	  rotX: 0, rotY: 0, rotZ: 0,
-						  	  scale: 1};
-		this.pclCropParams = {posX: 0, posY: 0, posZ: 0,
-							  rotX: 0, rotY: 0, rotZ: 0,
-							  scale: 1};
+		this.schemParams = 	 {posX: "0", posY: "0", posZ: "0",
+							  rotX: "0", rotY: "0", rotZ: "0",
+							  scale: "1"};
+		this.pclParams = 	 {posX: "0", posY: "0", posZ: "0",
+						  	  rotX: "0", rotY: "0", rotZ: "0",
+						  	  scale: "1"};
+		this.pclCropParams = {posX: "0", posY: "0", posZ: "0",
+							  rotX: "0", rotY: "0", rotZ: "0",
+							  scaleX: "1", scaleY: "1", scaleZ: "1"};
 
 		this.controlBox = "none";
 
@@ -653,6 +653,14 @@ export class Viewer extends EventDispatcher{
 	setEDLOpacity (value) {
 		if (this.edlOpacity !== value) {
 			this.edlOpacity = value;
+			this.scene.pointclouds.forEach(object => {
+				if(object.name === "Pointcloud") {
+					if(value == 0)
+						object.visible = false;
+					else
+						object.visible = true;
+				}
+			});
 			this.dispatchEvent({'type': 'edl_opacity_changed', 'viewer': this});
 		}
 	};
@@ -673,8 +681,53 @@ export class Viewer extends EventDispatcher{
 	};
 
 	setSchemParam (param, value) {
-		if(this.schemParams[param] !== value) {
+		if(this.schemParams[param] !== value && Number(value) === parseFloat(value)) {
+			let idx1, idx2;
+			if(["posX","posY","posZ"].includes(param))
+				idx1 = "position";
+			else if(["rotX","rotY","rotZ"].includes(param))
+				idx1 = "rotation";
+			else if("scale" === param)
+				idx1 = "scale";
+			else
+				return;
+
+			if(["posX","rotX"].includes(param))
+				idx2 = "x";
+			else if(["posY","rotY"].includes(param))
+				idx2 = "y";
+			else if(["posZ","rotZ"].includes(param))
+				idx2 = "z";
+			else if("scale" === param)
+				idx2 = "all"
+			else
+				return;
+
 			this.schemParams[param] = value;
+			this.inputHandler.scene.volumes.forEach(volume => {
+				if(volume.name === "Schem Bounding Box") {
+					if(idx2 !== "all")
+						volume[idx1][idx2] = value;
+					else {
+						volume[idx1].x = value;
+						volume[idx1].y = value;
+						volume[idx1].z = value;
+					}
+				}
+			});
+			this.scene.scene.children[0].children.forEach(object => {
+				if(object.name === "Schematic") {
+					let meshCenter = object.position.clone();
+					let bufferGeomCenter = object.geometry.boundingSphere.center.clone();
+					if(idx2 !== "all")
+						object[idx1][idx2] = value;
+					else {
+						object[idx1].x = value;
+						object[idx1].y = value;
+						object[idx1].z = value;
+					}
+				}
+			});
 			this.dispatchEvent({'type': 'schematic_param_changed', 'viewer': this});
 		}
 	}
@@ -684,8 +737,51 @@ export class Viewer extends EventDispatcher{
 	}
 
 	setPclParam (param, value) {
-		if(this.pclParams[param] !== value) {
+		if(this.pclParams[param] !== value && Number(value) === parseFloat(value)) {
+			let idx1, idx2;
+			if(["posX","posY","posZ"].includes(param))
+				idx1 = "position";
+			else if(["rotX","rotY","rotZ"].includes(param))
+				idx1 = "rotation";
+			else if("scale" === param)
+				idx1 = "scale";
+			else
+				return;
+
+			if(["posX","rotX"].includes(param))
+				idx2 = "x";
+			else if(["posY","rotY"].includes(param))
+				idx2 = "y";
+			else if(["posZ","rotZ"].includes(param))
+				idx2 = "z";
+			else if("scale" === param)
+				idx2 = "all"
+			else
+				return;
+
 			this.pclParams[param] = value;
+			this.inputHandler.scene.volumes.forEach(volume => {
+				if(volume.name === "Pcl Bounding Box") {
+					if(idx2 !== "all")
+						volume[idx1][idx2] = value;
+					else {
+						volume[idx1].x = value;
+						volume[idx1].y = value;
+						volume[idx1].z = value;
+					}
+				}
+			});
+			this.scene.pointclouds.forEach(object => {
+				if(object.name === "Pointcloud") {
+					if(idx2 !== "all")
+						object[idx1][idx2] = value;
+					else {
+						object[idx1].x = value;
+						object[idx1].y = value;
+						object[idx1].z = value;
+					}
+				}
+			});
 			this.dispatchEvent({'type': 'pointcloud_param_changed', 'viewer': this});
 		}
 	}
@@ -695,8 +791,31 @@ export class Viewer extends EventDispatcher{
 	}
 
 	setPclCropParam (param, value) {
-		if(this.pclCropParams[param] !== value) {
+		if(this.pclCropParams[param] !== value && Number(value) === parseFloat(value)) {
+			let idx1, idx2;
+			if(["posX","posY","posZ"].includes(param))
+				idx1 = "position";
+			else if(["rotX","rotY","rotZ"].includes(param))
+				idx1 = "rotation";
+			else if(["scaleX","scaleY","scaleZ"].includes(param))
+				idx1 = "scale";
+			else
+				return;
+
+			if(["posX","rotX","scaleX"].includes(param))
+				idx2 = "x";
+			else if(["posY","rotY","scaleY"].includes(param))
+				idx2 = "y";
+			else if(["posZ","rotZ","scaleZ"].includes(param))
+				idx2 = "z";
+			else
+				return;
+
 			this.pclCropParams[param] = value;
+			this.inputHandler.scene.volumes.forEach(volume => {
+				if(volume.name === "Pcl Cropping Box")
+					volume[idx1][idx2] = value;
+			});
 			this.dispatchEvent({'type': 'pointcloud_crop_param_changed', 'viewer': this});
 		}
 	}

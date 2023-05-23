@@ -22,11 +22,21 @@ async function run() {
             material.opacity = 0.5;
         });
         await waitForDef(()=>ifcModel?.geometry?.boundingSphere)
-        let potreeBounds = BoundPotree(ifcModel,pointcloud);
+        BoundPotree(ifcModel,pointcloud);
+        let clippingVolume = await waitForDef(()=> {
+            let clippingVolume;
+            viewer.inputHandler.scene.volumes.forEach(volume => {
+                if(volume.name === "Pcl Cropping Box")
+                    clippingVolume = volume;
+            });
+            return clippingVolume;
+        });
         let node = new PointCloudOctreeNode();
         node.geometryNode = pointcloud.root.geometryNode;
         node.sceneNode = pointcloud.root.sceneNode;
-        console.log(node.getPointsInBox(potreeBounds))
+        await waitForDef(()=>pointcloud.root.getPointsInBox.bind(pointcloud.root));
+        let root = pointcloud.root;
+        console.log(root.getPointsInBox(clippingVolume));
         MultiScaleICP(ifcFilePath,ifcModel,pointcloud,initialGuess,5).then(transformationMatrix=>
             applyICPResult(pointcloud,transformationMatrix)
         );
@@ -36,12 +46,13 @@ async function run() {
 window.addEventListener("load",run);
 
 function BoundPotree(ifcModel,pointcloud) {
-    let schemBoundingBox = new Box3();
-    ifcModel.geometry.boundingSphere.getBoundingBox(schemBoundingBox);
+    ifcModel.geometry.computeBoundingBox();
+    let schemBoundingBox = ifcModel.geometry.boundingBox.clone();
+    let temp = [schemBoundingBox.min.y,schemBoundingBox.max.y];
     schemBoundingBox.min.y = -1 * schemBoundingBox.max.z;
     schemBoundingBox.max.y = -1 * schemBoundingBox.min.z;
-    schemBoundingBox.min.z = schemBoundingBox.min.y;
-    schemBoundingBox.max.z = schemBoundingBox.max.y;
+    schemBoundingBox.min.z = temp[0];
+    schemBoundingBox.max.z = temp[1];
 
     let schemPosition = ifcModel.position;
     let pclBoundingBox = pointcloud.boundingBox;
@@ -62,7 +73,7 @@ function BoundPotree(ifcModel,pointcloud) {
     schemVolume.name = "Schem Bounding Box";
     schemVolume.scale.set(...scaleCoords(schemBoundingBox));
     schemVolume.position.set(...positionCoords(schemBoundingBox,schemPosition))
-    schemVolume.visible = false;
+    schemVolume.visible = true;
 
     let pclVolume = new Potree.BoxVolume();
     pclVolume.name = "Pcl Bounding Box";
@@ -72,10 +83,12 @@ function BoundPotree(ifcModel,pointcloud) {
 
     let clipVolume  = new Potree.BoxVolume();
     clipVolume.name = "Pcl Cropping Box";
-    clipVolume.scale.set(...scaleCoords(pclBoundingBox));
-    clipVolume.position.set(...positionCoords(pclBoundingBox,pclPosition));
+    clipVolume.scale.set(...scaleCoords(schemBoundingBox));
+    clipVolume.scale.x *= 1.1;
+    clipVolume.scale.y *= 1.1;
+    clipVolume.scale.z *= 2.5;
+    clipVolume.position.set(...positionCoords(schemBoundingBox,schemPosition));
     clipVolume.clip = true;
-
     viewer.scene.addVolume(schemVolume);
     viewer.scene.addVolume(pclVolume);
     viewer.scene.addVolume(clipVolume);
@@ -103,6 +116,7 @@ function loadViewer() {
 async function loadPotree(filePath) {
     return await Potree.loadPointCloud(filePath, "pointCloud").then(e => {
         pointcloud=e.pointcloud;
+        pointcloud.name = "Pointcloud";
         viewer.scene.addPointCloud(pointcloud);
         
         let material = pointcloud.material;
@@ -122,6 +136,7 @@ async function loadIFC(filePath,onLoad) {
         ifcjsContainer.rotation.x = Math.PI/2;
         viewer.scene.scene.add(ifcjsContainer);
         
+        ifcModel.name = "Schematic";
         ifcjsContainer.add(ifcModel);
 
         // Lighting
