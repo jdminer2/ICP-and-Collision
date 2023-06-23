@@ -16,30 +16,7 @@ export class Volume extends THREE.Object3D {
 
 		this._clip = args.clip || false;
 		this._visible = true;
-		this.showVolumeLabel = true;
 		this._modifiable = args.modifiable || true;
-
-		this.label = new TextSprite('0');
-		this.label.setBorderColor({r: 0, g: 255, b: 0, a: 0.0});
-		this.label.setBackgroundColor({r: 0, g: 255, b: 0, a: 0.0});
-		this.label.material.depthTest = false;
-		this.label.material.depthWrite = false;
-		this.label.material.transparent = true;
-		this.label.position.y -= 0.5;
-		this.add(this.label);
-
-		this.label.updateMatrixWorld = () => {
-			let volumeWorldPos = new THREE.Vector3();
-			volumeWorldPos.setFromMatrixPosition(this.matrixWorld);
-			this.label.position.copy(volumeWorldPos);
-			this.label.updateMatrix();
-			this.label.matrixWorld.copy(this.label.matrix);
-			this.label.matrixWorldNeedsUpdate = false;
-
-			for (let i = 0, l = this.label.children.length; i < l; i++) {
-				this.label.children[ i ].updateMatrixWorld(true);
-			}
-		};
 
 		{ // event listeners
 			this.addEventListener('select', e => {});
@@ -155,7 +132,7 @@ export class BoxVolume extends Volume{
 		this.material = new THREE.MeshBasicMaterial({
 			color: 0x00ff00,
 			transparent: true,
-			opacity: 0.3,
+			opacity: 0.03,
 			depthTest: true,
 			depthWrite: false});
 		this.box = new THREE.Mesh(boxGeometry, this.material);
@@ -176,10 +153,8 @@ export class BoxVolume extends Volume{
 
 		if (this._clip) {
 			this.box.visible = false;
-			this.label.visible = false;
 		} else {
 			this.box.visible = true;
-			this.label.visible = this.showVolumeLabel;
 		}
 	}
 
@@ -225,8 +200,6 @@ export class SphereVolume extends Volume{
 		this.sphere.geometry.computeBoundingBox();
 		this.boundingBox = this.sphere.geometry.boundingBox;
 		this.add(this.sphere);
-
-		this.label.visible = false;
 
 
 		let frameGeometry = new THREE.Geometry();
@@ -311,10 +284,8 @@ export class SphereVolume extends Volume{
 
 		//if (this._clip) {
 		//	this.sphere.visible = false;
-		//	this.label.visible = false;
 		//} else {
 		//	this.sphere.visible = true;
-		//	this.label.visible = this.showVolumeLabel;
 		//}
 	}
 

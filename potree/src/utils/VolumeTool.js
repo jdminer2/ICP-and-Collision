@@ -39,7 +39,6 @@ export class VolumeTool extends EventDispatcher{
 			volumes.forEach(e => this.viewer.scene.removeVolume(e));
 		});
 
-		viewer.addEventListener("update", this.update.bind(this));
 		viewer.addEventListener("render.pass.scene", e => this.render(e));
 		viewer.addEventListener("scene_changed", this.onSceneChange.bind(this));
 
@@ -120,36 +119,6 @@ export class VolumeTool extends EventDispatcher{
 		this.viewer.inputHandler.startDragging(volume);
 
 		return volume;
-	}
-
-	update(){
-		if (!this.viewer.scene) {
-			return;
-		}
-		
-		let camera = this.viewer.scene.getActiveCamera();
-		let renderAreaSize = this.viewer.renderer.getSize(new THREE.Vector2());
-		let clientWidth = renderAreaSize.width;
-		let clientHeight = renderAreaSize.height;
-
-		let volumes = this.viewer.scene.volumes;
-		for (let volume of volumes) {
-			let label = volume.label;
-			
-			{
-
-				let distance = label.position.distanceTo(camera.position);
-				let pr = Utils.projectedRadius(1, camera, distance, clientWidth, clientHeight);
-
-				let scale = (70 / pr);
-				label.scale.set(scale, scale, scale);
-			}
-
-			let calculatedVolume = volume.getVolume();
-			calculatedVolume = calculatedVolume / Math.pow(this.viewer.lengthUnit.unitspermeter, 3) * Math.pow(this.viewer.lengthUnitDisplay.unitspermeter, 3);  //convert to cubic meters then to the cubic display unit
-			let text = Utils.addCommas(calculatedVolume.toFixed(3)) + ' ' + this.viewer.lengthUnitDisplay.code + '\u00B3';
-			label.setText(text);
-		}
 	}
 
 	render(params){

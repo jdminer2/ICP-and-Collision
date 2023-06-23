@@ -127,15 +127,15 @@ export class Viewer extends EventDispatcher{
 
 		this.server = null;
 
-		this.schemParams = 	 {posX: "0", posY: "0", posZ: "0",
-							  rotX: "0", rotY: "0", rotZ: "0",
-							  scale: "1"};
-		this.pclParams = 	 {posX: "0", posY: "0", posZ: "0",
-						  	  rotX: "0", rotY: "0", rotZ: "0",
-						  	  scale: "1"};
-		this.pclCropParams = {posX: "0", posY: "0", posZ: "0",
-							  rotX: "0", rotY: "0", rotZ: "0",
-							  scaleX: "1", scaleY: "1", scaleZ: "1"};
+		this.schemParams = 	 {position: {x: "0", y: "0", z: "0"},
+							  rotation: {x: "0", y: "0", z: "0"},
+							  scale: {x: "1", y: "1", z: "1"}};
+		this.pclParams = 	 {position: {x: "0", y: "0", z: "0"},
+							  rotation: {x: "0", y: "0", z: "0"},
+							  scale: {x: "1", y: "1", z: "1"}};
+		this.pclCropParams = {position: {x: "0", y: "0", z: "0"},
+							  rotation: {x: "0", y: "0", z: "0"},
+							  scale: {x: "1", y: "1", z: "1"}};
 
 		this.controlBox = "none";
 
@@ -653,14 +653,10 @@ export class Viewer extends EventDispatcher{
 	setEDLOpacity (value) {
 		if (this.edlOpacity !== value) {
 			this.edlOpacity = value;
-			this.scene.pointclouds.forEach(object => {
-				if(object.name === "Pointcloud") {
-					if(value == 0)
-						object.visible = false;
-					else
-						object.visible = true;
-				}
-			});
+			if(value == 0)
+				this.pointcloud.visible = false;
+			else
+				this.pointcloud.visible = true;
 			this.dispatchEvent({'type': 'edl_opacity_changed', 'viewer': this});
 		}
 	};
@@ -672,6 +668,11 @@ export class Viewer extends EventDispatcher{
 	setSchematicOpacity (value) {
 		if (this.schematicOpacity !== value) {
 			this.schematicOpacity = value;
+			this.schematic.material.forEach(material => material.opacity = value);
+			if(value == 0)
+				this.schematic.visible = false;
+			else
+				this.schematic.visible = true;
 			this.dispatchEvent({'type': 'schematic_opacity_changed', 'viewer': this});
 		}
 	};
@@ -680,148 +681,141 @@ export class Viewer extends EventDispatcher{
 		return this.schematicOpacity;
 	};
 
-	setSchemParam (param, value) {
-		if(this.schemParams[param] !== value && Number(value) === parseFloat(value)) {
-			let idx1, idx2;
-			if(["posX","posY","posZ"].includes(param))
-				idx1 = "position";
-			else if(["rotX","rotY","rotZ"].includes(param))
-				idx1 = "rotation";
-			else if("scale" === param)
-				idx1 = "scale";
-			else
-				return;
+	getSchemParam (param,dimension) {
+		return this.schemParams[param][dimension];
+	}
 
-			if(["posX","rotX"].includes(param))
-				idx2 = "x";
-			else if(["posY","rotY"].includes(param))
-				idx2 = "y";
-			else if(["posZ","rotZ"].includes(param))
-				idx2 = "z";
-			else if("scale" === param)
-				idx2 = "all"
-			else
-				return;
+	getPclParam (param,dimension) {
+		return this.pclParams[param][dimension];
+	}
 
-			this.schemParams[param] = value;
-			this.inputHandler.scene.volumes.forEach(volume => {
-				if(volume.name === "Schem Bounding Box") {
-					if(idx2 !== "all")
-						volume[idx1][idx2] = value;
-					else {
-						volume[idx1].x = value;
-						volume[idx1].y = value;
-						volume[idx1].z = value;
-					}
-				}
-			});
-			this.scene.scene.children[0].children.forEach(object => {
-				if(object.name === "Schematic") {
-					let meshCenter = object.position.clone();
-					let bufferGeomCenter = object.geometry.boundingSphere.center.clone();
-					if(idx2 !== "all")
-						object[idx1][idx2] = value;
-					else {
-						object[idx1].x = value;
-						object[idx1].y = value;
-						object[idx1].z = value;
-					}
-				}
-			});
-			this.dispatchEvent({'type': 'schematic_param_changed', 'viewer': this});
+	getPclCropParam (param,dimension) {
+		return this.pclCropParams[param][dimension];
+	}
+
+	setSchemParam (param, dimension, value) {
+		if(Number(value) !== parseFloat(value))
+			return;
+
+		// Variable params
+		if(dimension === "all") {
+			if(this.schemParams[param].x === value 
+				&& this.schemParams[param].y === value 
+				&& this.schemParams[param].z === value
+			)
+				return;
+			this.schemParams[param] = {x:value, y:value, z:value};
 		}
-	}
-
-	getSchemParam (param) {
-		return this.schemParams[param];
-	}
-
-	setPclParam (param, value) {
-		if(this.pclParams[param] !== value && Number(value) === parseFloat(value)) {
-			let idx1, idx2;
-			if(["posX","posY","posZ"].includes(param))
-				idx1 = "position";
-			else if(["rotX","rotY","rotZ"].includes(param))
-				idx1 = "rotation";
-			else if("scale" === param)
-				idx1 = "scale";
-			else
+		else {
+			if(this.schemParams[param][dimension] === value)
 				return;
-
-			if(["posX","rotX"].includes(param))
-				idx2 = "x";
-			else if(["posY","rotY"].includes(param))
-				idx2 = "y";
-			else if(["posZ","rotZ"].includes(param))
-				idx2 = "z";
-			else if("scale" === param)
-				idx2 = "all"
-			else
-				return;
-
-			this.pclParams[param] = value;
-			this.inputHandler.scene.volumes.forEach(volume => {
-				if(volume.name === "Pcl Bounding Box") {
-					if(idx2 !== "all")
-						volume[idx1][idx2] = value;
-					else {
-						volume[idx1].x = value;
-						volume[idx1].y = value;
-						volume[idx1].z = value;
-					}
-				}
-			});
-			this.scene.pointclouds.forEach(object => {
-				if(object.name === "Pointcloud") {
-					if(idx2 !== "all")
-						object[idx1][idx2] = value;
-					else {
-						object[idx1].x = value;
-						object[idx1].y = value;
-						object[idx1].z = value;
-					}
-				}
-			});
-			this.dispatchEvent({'type': 'pointcloud_param_changed', 'viewer': this});
+			this.schemParams[param][dimension] = value;
 		}
+
+		// Schematic bounding volume
+		this.inputHandler.scene.volumes.forEach(volume => {
+			if(volume.name === "Schem Bounding Box") {
+				if(dimension === "all")
+					volume[param].set(Number(value), Number(value), Number(value));
+				else
+					volume[param][dimension] = Number(value);
+			}
+		});
+
+		// Schematic
+		if(dimension === "all")
+			this.schematic[param].set(Number(value), Number(value), Number(value));
+		else
+			this.schematic[param][dimension] = Number(value);
+		
+		this.dispatchEvent({'type': 'schematic_param_changed', 'viewer': this});
 	}
 
-	getPclParam (param) {
-		return this.pclParams[param];
-	}
+	// uses this.pclOffset, which is created in app.js
+	setPclParam (param, dimension, value) {
+		if(Number(value) !== parseFloat(value))
+			return;
 
-	setPclCropParam (param, value) {
-		if(this.pclCropParams[param] !== value && Number(value) === parseFloat(value)) {
-			let idx1, idx2;
-			if(["posX","posY","posZ"].includes(param))
-				idx1 = "position";
-			else if(["rotX","rotY","rotZ"].includes(param))
-				idx1 = "rotation";
-			else if(["scaleX","scaleY","scaleZ"].includes(param))
-				idx1 = "scale";
-			else
+		// Variable params
+		if(dimension === "all") {
+			if(this.pclParams[param].x === value 
+				&& this.pclParams[param].y === value 
+				&& this.pclParams[param].z === value
+			)
 				return;
-
-			if(["posX","rotX","scaleX"].includes(param))
-				idx2 = "x";
-			else if(["posY","rotY","scaleY"].includes(param))
-				idx2 = "y";
-			else if(["posZ","rotZ","scaleZ"].includes(param))
-				idx2 = "z";
-			else
-				return;
-
-			this.pclCropParams[param] = value;
-			this.inputHandler.scene.volumes.forEach(volume => {
-				if(volume.name === "Pcl Cropping Box")
-					volume[idx1][idx2] = value;
-			});
-			this.dispatchEvent({'type': 'pointcloud_crop_param_changed', 'viewer': this});
+			this.pclParams[param] = {x:value, y:value, z:value};
 		}
+		else {
+			if(this.pclParams[param][dimension] === value)
+				return;
+			this.pclParams[param][dimension] = value;
+		}
+
+		// Turn textbox inputs into number form for later.
+		let textboxVector = new THREE.Vector3(Number(this.pclParams[param].x), Number(this.pclParams[param].y), Number(this.pclParams[param].z));
+
+		// Pointcloud bounding volume
+		let boundingBoxPosition;
+		this.inputHandler.scene.volumes.forEach(volume => {
+			if(volume.name === "Pcl Bounding Box") {
+				if(param === "position")
+					volume.position.addVectors(textboxVector,this.pclOffset.userTextboxDiscrepancy)
+				else if(param === "rotation")
+					volume.rotation.setFromVector3(textboxVector);
+				else
+					volume.scale.multiplyVectors(textboxVector,this.pclOffset.scaleFactor);
+
+				boundingBoxPosition = volume.position;
+			}
+		});
+
+		// Pointcloud
+		if(param === "rotation")
+			this.pointcloud.rotation.setFromVector3(textboxVector);
+		else if(param === "scale")
+			this.pointcloud.scale.copy(textboxVector);
+		// Recalculate pointcloud position regardless of which textbox changed.
+		this.pointcloud.position.copy(
+			boundingBoxPosition.clone().add(
+				this.pclOffset.pointcloudDiscrepancy.clone()
+					.applyEuler(this.pointcloud.rotation)
+					.multiply(this.pointcloud.scale)
+			)
+		);
+		
+		this.dispatchEvent({'type': 'pointcloud_param_changed', 'viewer': this});
 	}
 
-	getPclCropParam (param) {
-		return this.pclCropParams[param];
+	setPclCropParam (param, dimension, value) {
+		if(Number(value) !== parseFloat(value))
+			return;
+
+		// Variable params
+		if(dimension === "all") {
+			if(this.pclCropParams[param].x === value 
+				&& this.pclCropParams[param].y === value 
+				&& this.pclCropParams[param].z === value
+			)
+				return;
+			this.pclCropParams[param] = {x:value, y:value, z:value};
+		}
+		else {
+			if(this.pclCropParams[param][dimension] === value)
+				return;
+			this.pclCropParams[param][dimension] = value;
+		}
+
+		// Pointcloud cropping volume
+		this.inputHandler.scene.volumes.forEach(volume => {
+			if(volume.name === "Pcl Cropping Box") {
+				if(dimension === "all")
+					volume[param].set(Number(value), Number(value), Number(value));
+				else
+					volume[param][dimension] = Number(value);
+			}
+		});
+		
+		this.dispatchEvent({'type': 'pointcloud_crop_param_changed', 'viewer': this});
 	}
 	
 	setControlBox(controlBox){

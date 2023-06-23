@@ -124,6 +124,12 @@ function samplePointFromTriangle(pointA,pointB,pointC,seed,unitTriangleSampleMet
     // A + xAB + yAC
     point.push(newA[dim] + x*(newB[dim]-newA[dim]) + y*(newC[dim]-newA[dim]));
   
+  // IFCJS is rotated 90 degrees relative to potree. Correction:
+  let temp = point[2];
+  point[2] = point[1];
+  point[1] = -1 * temp;
+
+
   return point;
 }
 
