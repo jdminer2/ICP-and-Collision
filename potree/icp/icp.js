@@ -69,9 +69,11 @@ function getDepthParameters(depth,pointcloud,targetModel,parameters) {
     parameters.numIterations = 2*2**(parameters.maxDepth-depth+1);
     // The algorithm assumes the user roughly aligned the pointcloud on the IFC model. After this alignment, points in the source pointcloud that are
     // farther than this distance from any points in the target IFC model are considered irrelevant (this distance is measured before ICP's transformations)
-    parameters.maxSampleDistance = Math.max(...(["x","y","z"].map(dim=>targetModel.geometry.boundingBox.max[dim] - targetModel.geometry.boundingBox.min[dim])))*0.01;
+    parameters.maxSampleDistance = Math.max(...(["x","y","z"].map(dim=>targetModel.geometry.boundingBox.max[dim] - targetModel.geometry.boundingBox.min[dim])))
+        * 0.05;
     // The max range to search for neighboring points for matchups (this distance is measured after ICP's transformations)
-    parameters.maxNeighborDistance = Infinity;//3*pointcloud.pcoGeometry.spacing/2**depth;
+    parameters.maxNeighborDistance = Math.max(...(["x","y","z"].map(dim=>targetModel.geometry.boundingBox.max[dim] - targetModel.geometry.boundingBox.min[dim])))
+    * 0.05;//3*pointcloud.pcoGeometry.spacing/2**depth;
     // How many points to sample from the IFC mesh.
     parameters.ifcSampleCount = 10000*1.1**depth;
 }
@@ -84,6 +86,8 @@ function weightEvaluation(sourcePoint) {
 // The main function. 
 export async function MultiScaleICP(/*targetFilePath,*/ targetModel, sourcePointcloud, initialEstimate, clipVolume) {
     let result = {transformation:new Matrix([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]), scale:1, correspondences:[], fitness:0, inlier_rmse:0};
+
+    let overallTransformation = new Matrix([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]);
 
     let parameters = getOverallParameters();
 
@@ -116,14 +120,17 @@ export async function MultiScaleICP(/*targetFilePath,*/ targetModel, sourcePoint
         DoSingleScaleICPIterations(sourcePoints,targetPoints,weights,parameters,result);
         if(isNaN(result.scale) || result.scale === Infinity || result.scale === -Infinity || result.scale === 0) {
             console.log("Scale is invalid. Aborting.");
-            return new Matrix([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]);
+            return new Matrix4();
         }
         if(result.inlier_rmse == 0)
             break;
+        overallTransformation = result.transformation.mmul(overallTransformation);
+        sourcePointcloud.applyMatrix4(mlmatrixToThreematrix(result.transformation));
+        console.log(result.transformation);
+        result.transformation = new Matrix([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]);
     }
-    renderPoints(sourcePoints, "blue", result.transformation)
-    console.log(result);
-    return result.transformation
+    renderPoints(sourcePoints, "blue", overallTransformation)
+    return;
 }
 
 function DoSingleScaleICPIterations(sourcePoints,targetPoints,weights,parameters,result) {
@@ -248,6 +255,10 @@ function ComputeTransformationPointToPoint(correspondences,weights) {
     }
 
     return getSimilarityTransformation(source_mat,target_mat,weights);
+}
+
+function mlmatrixToThreematrix(mlmatrix) {
+    return (new Matrix4()).set(...(mlmatrix.to1DArray()));
 }
 
 // Point to plane. Not fully implemented.
@@ -380,15 +391,8 @@ function renderPoints(points, color, transformation) {
         new PointsMaterial({color:color, size: 1, sizeAttenuation: false})
     );
 
-    if(transformation) {
-        let flattenedTransMatrix = transformation.data.flatMap(row=>[...row])
-        if(Number.isNaN(flattenedTransMatrix[0])) {
-            console.log("Failure.");
-            return;
-        }
-        let THREETransMatrix = new Matrix4().set(...flattenedTransMatrix)
-        pointsObject.applyMatrix4(THREETransMatrix);
-    }
+    if(transformation)
+        pointsObject.applyMatrix4(mlmatrixToThreematrix(transformation));
 
     viewer.scene.scene.add(pointsObject);
 }

@@ -44,8 +44,10 @@ function randomTransformationMatrix(maxXRot,maxYRot,maxZRot,maxScaleFactor,maxXM
     return generateTransformationMatrix(xRot,yRot,zRot,scale,xMove,yMove,zMove);
 }
 
-//let initialGuess = generateTransformationMatrix(0,0,0,1,0,0,0);
-let initialGuess = randomTransformationMatrix(0.1,0.1,0.1,2,25,25,25);
+let initialGuess;
+initialGuess = generateTransformationMatrix(0,0,0,1,0,0,0);
+initialGuess = randomTransformationMatrix(0.1,0.1,0.1,1.1,10,10,10);
+initialGuess = generateTransformationMatrix(-0.096187,0.074300,-0.024604,1.034383,-0.498889,-8.420134,-9.227480)
 
 async function initialize() {
     loadViewer();
@@ -59,8 +61,8 @@ async function initialize() {
     console.log(viewer);
     [viewer.clipVolume, viewer.pclOffset] = createVolumeTools(viewer.schematic, viewer.pointcloud);
     window.removeEventListener("load",initialize);
+    viewer.pointcloud.applyMatrix4(initialGuess);
     $('#runICPButton').on("click", (e)=>{
-        viewer.pointcloud.applyMatrix4(initialGuess);
         MultiScaleICP(viewer.schematic,viewer.pointcloud,generateTransformationMatrix(0,0,0,1,0,0,0),viewer.clipVolume).then(transformationMatrix=>
             {}//applyICPResult(viewer.pointcloud,transformationMatrix)
         );
