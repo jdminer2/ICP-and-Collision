@@ -4,6 +4,7 @@ import { MultiScaleICP, TestOptimalTransformationForIteration } from "./icp";
 import { VolumeTool } from "../src/utils/VolumeTool";
 import { BoxVolume } from "../src/utils/Volume";
 import { PointCloudOctree, PointCloudOctreeNode } from "../src/PointCloudOctree";
+import { waitForDef } from "./utils";
 
 let potreeFilePath = "./0611/metadata.json";;
 let ifcFilePath = "mccormick-0416-research.ifc";
@@ -219,12 +220,3 @@ function applyICPResult(pointcloud,transformationMatrix) {
     pointcloud.applyMatrix4(THREETransMatrix)
     console.log("Reached");
 }
-
-async function waitForDef(getter) {
-    let val = getter();
-    while(val === undefined || val === null) {
-      await new Promise(e=>setTimeout(e,0));
-      val = getter();
-    }
-    return val
-  }

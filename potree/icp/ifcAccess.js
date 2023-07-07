@@ -1,4 +1,5 @@
 import {IfcAPI, IFCCARTESIANPOINT} from "web-ifc/web-ifc-api";
+import { Vector3 } from "../libs/three.js/build/three.module";
 
 // Takes IFCCARTESIANPOINTs from IFC file. May be inaccurate for some IFC files.
 export async function getVertexPoints(ifcFilePath) {
@@ -130,7 +131,7 @@ function samplePointFromTriangle(pointA,pointB,pointC,seed,unitTriangleSampleMet
   point[1] = -1 * temp;
 
 
-  return point;
+  return new Vector3(...point);
 }
 
 // Get area of triangle

@@ -1,7 +1,10 @@
 import { OctreeGeometryNode } from "../src/modules/loader/2.0/OctreeGeometry";
-import { BufferGeometry, BufferAttribute, Euler, Vector3 } from "../libs/three.js/build/three.module";
-  // Returns all points in the pointcloud from the nodes at the specified depth, if they are contained within the given clipVolume.
-  export async function getPointsFromPointcloudUsingClipVolume(clipVolume,depth,pointcloud) {
+import { BufferGeometry, BufferAttribute, Euler, Vector3, Matrix4 } from "../libs/three.js/build/three.module";
+import { Matrix as Mlmatrix } from 'ml-matrix';
+import { waitForDef, matrix4ToMlmatrix } from "./utils"
+
+  // Precomputed values for the clipVolume point filtering strategy.
+  export function clipVolumePrecomputedValues(clipVolume,pointcloud) {
     // Obtain the 6 normals, 3 from the clipVolume's faces and 3 from the pointcloud's nodes' faces.
     let normals = [
       new Vector3(1,0,0).applyEuler(clipVolume.rotation),
@@ -14,15 +17,15 @@ import { BufferGeometry, BufferAttribute, Euler, Vector3 } from "../libs/three.j
 
     let clipVolumeProjections = getBoxProjections(normals, clipVolume, clipVolume);
 
-    return await getPointsRecursive(await getRootNode(pointcloud), depth, pointcloud, 
-      volumeIntersectsNode, {normals, clipVolumeProjections}, 
-      volumeContainsPoint, {normals, clipVolumeProjections})
+    return {normals, clipVolumeProjections};
   }
+  
+  // maxDistancePrecomputedValues should be {maxDistance, targetPoints} where targetPoints is in Vector3 form.
 
-  // Selection method for nodes which only takes points inside a clipping volume.
+  // Filtering method for nodes which only accepts nodes that may have points inside a box volume.
   // According to the separating axis theorem, for two convex polyhedra, if the projections of the polyhedra overlap
   // for each normal of both polyhedra's faces, then and only then do the polyhedra intersect. https://dyn4j.org/2010/01/sat/
-  function volumeIntersectsNode({normals, clipVolumeProjections}, node, pointcloud) {
+  export function clipVolumeNodeFilterMethod({normals, clipVolumeProjections}, node, pointcloud) {
     let nodeProjections = getBoxProjections(normals, node, pointcloud);
 
     return normals.every((normal,i) =>
@@ -31,16 +34,49 @@ import { BufferGeometry, BufferAttribute, Euler, Vector3 } from "../libs/three.j
     )
   }
 
-  // Selection method for points which only takes points inside a clipping volume.
-  function volumeContainsPoint({normals, clipVolumeProjections}, point) {
+  // Filtering method for nodes which only accepts nodes that may have points within maxDistance of a target point.
+  export function maxDistanceNodeFilterMethod({maxDistance, targetPoints}, node, pointcloud) {
+    // I want to compare the bounding box and the target point in a frame of reference where the bounding box is axis-aligned,
+    // And I want to measure maxDistance in target point's units.
+    // So I apply scale to bounding box, but not rotation. This means I must apply reverse rotation and position to target point.
+    // Scale can be applied before rotation. All that matters is that position is applied last, or reverse position is applied first.
+    let min = node.boundingBox.min.clone().multiply(pointcloud.scale);
+    let max = node.boundingBox.max.clone().multiply(pointcloud.scale);
+
+    // This only matters if a component of pointcloud.scale is negative.
+    let newMin = new Vector3(Math.min(min.x,max.x), Math.min(min.y,max.y), Math.min(min.z,max.z))
+    let newMax = new Vector3(Math.max(min.x,max.x), Math.max(min.y,max.y), Math.max(min.z,max.z));
+
+    let reverseOrder = pointcloud.rotation.order[2] + pointcloud.rotation.order[1] + pointcloud.rotation.order[0]; // String reversal.
+    let reverseRotation = new Euler(-pointcloud.rotation.x, -pointcloud.rotation.y, -pointcloud.rotation.z, reverseOrder)
+
+    return targetPoints.some(targetPoint => {
+      let newTargetPoint = targetPoint.clone().sub(pointcloud.position).applyEuler(reverseRotation);
+      let x = Math.max(0, newTargetPoint.x - newMax.x, newMin.x - newTargetPoint.x);
+      let y = Math.max(0, newTargetPoint.y - newMax.y, newMin.y - newTargetPoint.y);
+      let z = Math.max(0, newTargetPoint.z - newMax.z, newMin.z - newTargetPoint.z);
+      return Math.sqrt(x**2 + y**2 + z**2) <= maxDistance;
+    })
+  }
+
+  // Filtering method for points which only accepts points inside a box volume. Expects point to be a Vector3.
+  export function clipVolumePointFilterMethod({normals, clipVolumeProjections}, point) {
     return normals.every((normal,i) => {
       let projectedPoint = point.dot(normal);
       return clipVolumeProjections[i][0] <= projectedPoint && projectedPoint <= clipVolumeProjections[i][1];
     });
   }
 
+  // Filtering method for points which only accepts points within maxDistance of a target point. Expects point and targetPoints to be Vector3s.
+  export function maxDistancePointFilterMethod({maxDistance, targetPoints}, point) {
+    return targetPoints.some(targetPoint =>
+      (targetPoint.x - point[0])**2 + (targetPoint.y - point[1])**2 + (targetPoint.z - point[2])**2 < maxDistance**2
+    );
+  }
+
   // If the normal was extended into an infinite line, and the box was projected onto this line, 
   // this returns the interval that the projection covers. (Repeated for each normal).
+  // Helper function for clipVolume methods.
   function getBoxProjections(normals, boundingBoxHolder, transformationHolder) {    
     let cornerPoints = [0,1,2,3,4,5,6,7].map(i => {
       let x = i % 2;
@@ -62,83 +98,86 @@ import { BufferGeometry, BufferAttribute, Euler, Vector3 } from "../libs/three.j
     );
   }
 
-  export async function getPointsFromPointcloudUsingMaxDistance(maxDistance,targetPoints,depth,pointcloud) {
-    let targetPointObjects = targetPoints.map(point => new Vector3(...point))
-    return await getPointsRecursive(await getRootNode(pointcloud), depth, pointcloud, 
-      nodeInMaxDistance, {maxDistance, targetPointObjects}, 
-      pointInMaxDistance, {maxDistance, targetPointObjects}
+  // Returns an array of the child nodes of the nodes in prevDepth, filtered according to nodeFilterMethod, and loaded so they can be accessed.
+  // Precomputed values are values that are the same for all nodes/points and are expensive to compute every time. 
+  // It is better to compute them just once and pass them into the function.
+  export async function getNextDepthOfNodes(prevDepth, pointcloud, nodeFilterMethod, nodeFilterPrecomputedValues) {
+    // Async map to get children of prevDepth.
+    let newDepth = (await Promise.all(prevDepth.map(async node =>
+      Object.values(await waitForDef(() => node.children))
+    )))
+    // Flatten into a 1D array.
+    .flat()
+    // Keep only the nodes that pass nodeFilterMethod.
+    .filter(node => nodeFilterMethod(nodeFilterPrecomputedValues, node, pointcloud));
+    // Add to newDepth.
+    return newDepth;
+  }
+
+  export async function getPointcloudPoints(N, pointcloud, nodeFilterMethod, nodeFilterPrecomputedValues, pointFilterMethod, pointFilterPrecomputedValues) {
+    let nodes = [];
+    let depth = 0;
+    let points = [];
+    while(points.length < N) {
+      if(depth == 0)
+        nodes = [await getRootNode(sourcePointcloud)];
+      else
+        nodes = await getNextDepthOfNodes(nodes, pointcloud, nodeFilterMethod, nodeFilterPrecomputedValues);
+      
+      if(nodes.length == 0)
+        break;
+      
+      points = points.concat(await getPointsFromNodes(nodes,pointcloud,pointFilterMethod,pointFilterPrecomputedValues));
+    }
+    return points;
+  }
+
+  // Returns an array of Vector3s representing points, taken from the given nodes, filtered according to pointFilterMethod.
+  export async function getPointsFromNodes(nodes, pointcloud, pointFilterMethod, pointFilterPrecomputedValues) {
+    let pointcloudMatrix =  
+    new Matrix4().makeTranslation(pointcloud.position.x,pointcloud.position.y,pointcloud.position.z).multiply(
+      new Matrix4().makeScale(pointcloud.scale.x,pointcloud.scale.y,pointcloud.scale.z).multiply(
+        new Matrix4().makeRotationFromEuler(pointcloud.rotation)
+    ))
+    return new Mlmatrix(
+      // Maps nodes to an array of promises for their points, then await to get an array of every array of points.
+      (await Promise.all(nodes.map(async node => {
+        loadNode(node);
+        // The transformation matrix to apply to the points of this node. The transformation and points matrices are transposed because it's faster that way.
+        let nodeTransformation = matrix4ToMlmatrix(
+          new Matrix4().multiplyMatrices(
+            pointcloudMatrix, 
+            new Matrix4().makeTranslation(node.boundingBox.min.x,node.boundingBox.min.y,node.boundingBox.min.z)
+        )).transpose();
+
+        /* TEST CODE: Both of these should result in the same values. Currently passing. * /
+          console.log(new Vector3(1,4,3.7).applyMatrix4(new Matrix4().multiplyMatrices(
+            pointcloudMatrix, 
+            new Matrix4().makeTranslation(node.boundingBox.min.x,node.boundingBox.min.y,node.boundingBox.min.z)
+          )));
+          
+          console.log(new Vector3(1,4,3.7).add(node.boundingBox.min).applyEuler(pointcloud.rotation).multiply(pointcloud.scale).add(pointcloud.position));
+        /**/
+
+        // Extract point data from the node.
+        let position = await waitForDef(()=>node.geometry?.attributes?.position);
+        let pointsMatrix = Mlmatrix.from1DArray(node.numPoints,3,position.array)
+          // Add a column of ones for the 4D transformation matrix.
+          .addColumn((new Array(node.numPoints)).fill(1));
+        // Apply transformation matrix.
+        let transformedPoints = pointsMatrix.mmul(nodeTransformation);
+        return transformedPoints.data;
+      })))
+      // Flatten to get a single array of points.
+      .flat()
+      // Filter points according to pointFilterMethod.
+      .filter(point => pointFilterMethod(pointFilterPrecomputedValues, point))
     )
-  }
-
-  function nodeInMaxDistance({maxDistance, targetPointObjects}, node, pointcloud) {
-    // I want to compare the bounding box and the target point in a frame of reference where the bounding box is axis-aligned,
-    // And I want to measure maxDistance in target point's units.
-    // So I apply scale to bounding box, but not rotation. This means I must apply reverse rotation and position to target point.
-    // Scale can be applied before rotation. All that matters is that position is applied last, or reverse position is applied first.
-    let min = node.boundingBox.min.clone().multiply(pointcloud.scale);
-    let max = node.boundingBox.max.clone().multiply(pointcloud.scale);
-
-    // This only matters if a component of pointcloud.scale is negative.
-    let newMin = new Vector3(Math.min(min.x,max.x), Math.min(min.y,max.y), Math.min(min.z,max.z))
-    let newMax = new Vector3(Math.max(min.x,max.x), Math.max(min.y,max.y), Math.max(min.z,max.z));
-
-    let reverseOrder = pointcloud.rotation.order[2] + pointcloud.rotation.order[1] + pointcloud.rotation.order[0];
-    let reverseRotation = new Euler(-pointcloud.rotation.x, -pointcloud.rotation.y, -pointcloud.rotation.z, reverseOrder)
-
-    return targetPointObjects.some(targetPoint => {
-      let newTargetPoint = targetPoint.clone().sub(pointcloud.position).applyEuler(reverseRotation);
-      let x = Math.max(0, newTargetPoint.x - newMax.x, newMin.x - newTargetPoint.x);
-      let y = Math.max(0, newTargetPoint.y - newMax.y, newMin.y - newTargetPoint.y);
-      let z = Math.max(0, newTargetPoint.z - newMax.z, newMin.z - newTargetPoint.z);
-      return Math.sqrt(x**2 + y**2 + z**2) <= maxDistance;
-    })
-  }
-
-  function pointInMaxDistance({maxDistance, targetPointObjects}, point) {
-    return targetPointObjects.some(targetPoint => targetPoint.distanceTo(point) <= maxDistance);
-  }
-
-  // Returns the points in the specified node, and its descendants to the specified depth. 
-  // Filters nodes according to nodeSelectionMethod, to avoid searching nodes that will have no valid points, reducing the amount of searching.
-  // Filters points according to pointSelectionMethod, to keep only valid points.
-  // PrecomputedValues are values used in the SelectionMethods which would be too expensive to compute every time the SelectionMethod is run.
-  // They are computed earlier, and passed into the functions every time.
-  async function getPointsRecursive(node, depth, pointcloud, 
-    nodeSelectionMethod, nodeSelectionPrecomputedValues, 
-    pointSelectionMethod, pointSelectionPrecomputedValues
-  ) {
-    // Filter nodes using the nodeSelectionMethod, and do not search deeper in them unless they are selected.
-    if(!nodeSelectionMethod(nodeSelectionPrecomputedValues, node, pointcloud))
-      return [];
-    loadNode(node);
-    // If reached the target depth, take the points.
-    if(depth == 0) {
-      // Extract points from the node
-      let position = await waitForDef(()=>node.geometry?.attributes?.position);
-      let points = Array(position.array.length/position.itemSize);
-      for(let i = 0; i < position.array.length/position.itemSize; i++) {
-        // Transform the point data according to bounding box and pointcloud's transformations.
-        points[i] = new Vector3(...(position.array.slice(i*position.itemSize, i*position.itemSize + 3))).add(node.boundingBox.min)
-          .applyEuler(pointcloud.rotation).multiply(pointcloud.scale).add(pointcloud.position);
-      }
-      // Filter points using the pointSelectionMethod.
-      return points.filter(point => pointSelectionMethod(pointSelectionPrecomputedValues, point)).map(point => point.toArray());
-    }
-    // If not reached the target depth, recursively take the node's children.
-    if(depth > 0) {
-      let childArray = await waitForDef(()=>node.children).then(children=>
-        Object.values(children).map(child=>getPointsRecursive(child, depth-1, pointcloud,
-          nodeSelectionMethod, nodeSelectionPrecomputedValues, 
-          pointSelectionMethod, pointSelectionPrecomputedValues
-        ))
-      );
-      return (await Promise.all(childArray)).flat();
-    }
   }
 
   // Copies the root of the pointcloud so that loading its children doesn't affect which points are loaded in the rendered scene
   // It seems like many colorless potree points are added to the scene by this algorithm, so maybe there is a problem here or in loadNode.
-  async function getRootNode(pointcloud) {
+  export async function getRootNode(pointcloud) {
     return await waitForDef(()=> {
       let val = pointcloud?.pcoGeometry?.root?.loaded;
       if(val !== false && val !== undefined)
@@ -160,18 +199,9 @@ import { BufferGeometry, BufferAttribute, Euler, Vector3 } from "../libs/three.j
       node.byteOffset = root.byteOffset;
       node.byteSize = root.byteSize;
       node.numPoints = root.numPoints;
+
       return node
     })
-  }
-
-  // Asynchronously waits for the value to become defined. Necessary because pointcloud loading is strange and some properties don't exist initially.
-  async function waitForDef(getter) {
-    let val = getter();
-    while(val === undefined) {
-      await new Promise(e=>setTimeout(e,0));
-      val = getter();
-    }
-    return val
   }
 
   // Copy of NodeLoader.load, without being blocked by the loaded nodes limit, and with some details ignored.

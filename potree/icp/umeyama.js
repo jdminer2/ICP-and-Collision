@@ -60,13 +60,13 @@ SOFTWARE.
  * - svd refers to the SVD given by U, D and V
  */
 
-import {determinant,Matrix,SVD} from "ml-matrix"
+import {determinant,Matrix as Mlmatrix,SVD} from "ml-matrix"
 
 /**
  * Compute transformation to transform a tuple of source points to match a tuple of target points
  * following equation 40, 41 and 42 of umeyama_1991.
  *
- * This function expects two Matrix instances of the same shape
+ * This function expects two Mlmatrix instances of the same shape
  * (m, n), where n is the number of points and m is the number of dimensions.
  * This is the shape used by umeyama_1991. m and n can take any positive value.
  * 
@@ -76,11 +76,11 @@ import {determinant,Matrix,SVD} from "ml-matrix"
  *
  * The returned matrix would transform fromPoints to toPoints.
  *
- * @param {!Matrix} fromPoints - the source points {x_1, ..., x_n}.
- * @param {!Matrix} toPoints - the target points {y_1, ..., y_n}.
+ * @param {!Mlmatrix} fromPoints - the source points {x_1, ..., x_n}.
+ * @param {!Mlmatrix} toPoints - the target points {y_1, ..., y_n}.
  * @param {boolean} allowReflection - If true, the source points may be
  *   reflected to achieve a better mean squared error.
- * @returns {Matrix}
+ * @returns {Mlmatrix}
  */
 export function getSimilarityTransformation(fromPoints,
                                      toPoints,
@@ -102,7 +102,7 @@ export function getSimilarityTransformation(fromPoints,
         allowReflection);
 
     const rotation = svd.U
-        .mmul(Matrix.diag(mirrorIdentityForSolution))
+        .mmul(Mlmatrix.diag(mirrorIdentityForSolution))
         .mmul(svd.V.transpose());
 
     // 2. Compute the scale.
@@ -121,16 +121,16 @@ export function getSimilarityTransformation(fromPoints,
     const scale = toVariance / trace; // Bugfix
 
     // 3. Compute the translation.
-    const fromMean = Matrix.columnVector(weightedMeanByRow(fromPoints,weights))
-    const toMean = Matrix.columnVector(weightedMeanByRow(toPoints,weights))
-    const translation = Matrix.sub(
+    const fromMean = Mlmatrix.columnVector(weightedMeanByRow(fromPoints,weights))
+    const toMean = Mlmatrix.columnVector(weightedMeanByRow(toPoints,weights))
+    const translation = Mlmatrix.sub(
         toMean,
-        Matrix.mul(rotation.mmul(fromMean), scale));
+        Mlmatrix.mul(rotation.mmul(fromMean), scale));
 
     /*
     // 4. Transform the points.
-    const transformedPoints = Matrix.add(
-        Matrix.mul(rotation.mmul(fromPoints), scale),
+    const transformedPoints = Mlmatrix.add(
+        Mlmatrix.mul(rotation.mmul(fromPoints), scale),
         translation.repeat({columns: numPoints}));
 
     return transformedPoints;
@@ -138,7 +138,7 @@ export function getSimilarityTransformation(fromPoints,
 
     const transformationMatrix = rotation.mul(scale)
     transformationMatrix.addColumn(dimensions,translation)
-    transformationMatrix.addRow(dimensions,Matrix.zeros(1,dimensions + 1))
+    transformationMatrix.addRow(dimensions,Mlmatrix.zeros(1,dimensions + 1))
     transformationMatrix.set(dimensions,dimensions,1)
 
     // Scale is useful to return also
@@ -149,18 +149,18 @@ export function getSimilarityTransformation(fromPoints,
  * Compute the mean squared error of a given solution, following equation 1
  * in umeyama_1991.
  *
- * This function expects two Matrix instances of the same shape
+ * This function expects two Mlmatrix instances of the same shape
  * (m, n), where n is the number of points and m is the number of dimensions.
  * This is the shape used by umeyama_1991.
  *
- * @param {!Matrix} transformedPoints - the solution, for example
+ * @param {!Mlmatrix} transformedPoints - the solution, for example
  *   returned by getSimilarityTransformation(...).
- * @param {!Matrix} toPoints - the target points {y_1, ..., y_n}.
+ * @param {!Mlmatrix} toPoints - the target points {y_1, ..., y_n}.
  * @returns {number}
  */
 function getSimilarityTransformationError(transformedPoints, toPoints) {
     const numPoints = transformedPoints.columns;
-    const difference = Matrix.sub(toPoints, transformedPoints);
+    const difference = Mlmatrix.sub(toPoints, transformedPoints);
     return Math.pow(difference.norm('frobenius'), 2) / numPoints;
 }
 
@@ -168,12 +168,12 @@ function getSimilarityTransformationError(transformedPoints, toPoints) {
  * Compute the minimum possible mean squared error for a given problem,
  * following equation 33 in umeyama_1991.
  *
- * This function expects two Matrix instances of the same shape
+ * This function expects two Mlmatrix instances of the same shape
  * (m, n), where n is the number of points and m is the number of dimensions.
  * This is the shape used by umeyama_1991. m and n can take any positive value.
  *
- * @param {!Matrix} fromPoints - the source points {x_1, ..., x_n}.
- * @param {!Matrix} toPoints - the target points {y_1, ..., y_n}.
+ * @param {!Mlmatrix} fromPoints - the source points {x_1, ..., x_n}.
+ * @param {!Mlmatrix} toPoints - the target points {y_1, ..., y_n}.
  * @param {boolean} allowReflection - If true, the source points may be
  *   reflected to achieve a better mean squared error.
  * @returns {number}
@@ -216,15 +216,15 @@ function getSimilarityTransformationErrorBound(fromPoints,
  * Computes the covariance matrix of the source points and the target points
  * following equation 38 in umeyama_1991.
  *
- * This function expects two Matrix instances of the same shape
+ * This function expects two Mlmatrix instances of the same shape
  * (m, n), where n is the number of points and m is the number of dimensions.
  * This is the shape used by umeyama_1991. m and n can take any positive value.
  * 
  * Note: I have added weighting to this function. It acts as if there are weights[i] copies of each point.
  *
- * @param {!Matrix} fromPoints - the source points {x_1, ..., x_n}.
- * @param {!Matrix} toPoints - the target points {y_1, ..., y_n}.
- * @returns {Matrix}
+ * @param {!Mlmatrix} fromPoints - the source points {x_1, ..., x_n}.
+ * @param {!Mlmatrix} toPoints - the target points {y_1, ..., y_n}.
+ * @returns {Mlmatrix}
  */
 function getSimilarityTransformationCovariance(fromPoints, toPoints, weights) {
     const dimensions = fromPoints.rows;
@@ -234,18 +234,18 @@ function getSimilarityTransformationCovariance(fromPoints, toPoints, weights) {
     for(let j = 0; j < weights.length; ++j)
         totalWeight += weights[j];
 
-    const fromMean = Matrix.columnVector(weightedMeanByRow(fromPoints,weights));
-    const toMean = Matrix.columnVector(weightedMeanByRow(toPoints,weights));
+    const fromMean = Mlmatrix.columnVector(weightedMeanByRow(fromPoints,weights));
+    const toMean = Mlmatrix.columnVector(weightedMeanByRow(toPoints,weights));
 
-    const covariance = Matrix.zeros(dimensions, dimensions);
+    const covariance = Mlmatrix.zeros(dimensions, dimensions);
 
     for (let pointIndex = 0; pointIndex < numPoints; pointIndex++) {
         const fromPoint = fromPoints.getColumnVector(pointIndex);
         const toPoint = toPoints.getColumnVector(pointIndex);
-        const outer = Matrix.sub(toPoint, toMean)
-            .mmul(Matrix.sub(fromPoint, fromMean).transpose());
+        const outer = Mlmatrix.sub(toPoint, toMean)
+            .mmul(Mlmatrix.sub(fromPoint, fromMean).transpose());
 
-        covariance.addM(Matrix.div(outer.mulS(weights[pointIndex]), totalWeight));
+        covariance.addM(Mlmatrix.div(outer.mulS(weights[pointIndex]), totalWeight));
     }
 
     return covariance;
@@ -258,7 +258,7 @@ function getSimilarityTransformationCovariance(fromPoints, toPoints, weights) {
  * See getSimilarityTransformationCovariance(...) for more details on how to
  * compute the covariance matrix.
  *
- * @param {!Matrix} covarianceMatrix - the matrix returned by
+ * @param {!Mlmatrix} covarianceMatrix - the matrix returned by
  *   getSimilarityTransformationCovariance(...)
  * @param {boolean} allowReflection - If true, the source points may be
  *   reflected to achieve a better mean squared error.
