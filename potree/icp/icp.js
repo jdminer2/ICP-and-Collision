@@ -41,32 +41,37 @@ Please cite our work if you use Open3D.
  */
 
 import { Matrix as Mlmatrix } from "ml-matrix";
-import { getDistributedPlanePoints, getRandomPlanePoints, getVertexPoints } from "./ifcAccess";
-import { getRootNode, getNextDepthOfNodes, getPointsFromNodes, maxDistanceNodeFilterMethod, maxDistancePointFilterMethod, getNPoints } from "./potreeAccess";
+import { getDistributedPlanePoints } from "./ifcAccess";
+import { getNextDepthOfNodes, getPointsMatrixFromNodes, maxDistanceNodeFilterMethod, maxDistancePointFilterMethod } from "./potreeAccess";
 import { getSimilarityTransformation } from "./umeyama";
 
-import {Points, PointsMaterial, BufferGeometry, BufferAttribute, Matrix4, Vector3} from "three";
-import { mlmatrixToMatrix4 } from "./utils";
+import {Points, PointsMaterial, BufferGeometry, Matrix4, Vector3} from "three";
+import { mlmatrixToMatrix4, array2DToMlmatrix, mlmatrixConcat, transposeArray2D } from "./utils";
+import { KDTree } from "./kdtree";
 
 // Tweakable. I am not sure the best parameters to set for these.
 function getOverallParameters() {
     return {
         // Min and max (inclusive) depths to search in the pointcloud's octree. There is one set of iterations per depth. 
         // Depth 0 is the root of the tree, and depths greater than the tree's depth just take the full tree.
-        minRound: 0,
-        maxRound: 5,
+        minDepth: 0,
+        maxDepth: 5,
         // At shallow depths, sometimes no or very few points will be selected from the source pointcloud, and the transformation will be inaccurate.
         // This parameter specifies a minimum number of found source points. If it is not met, the algorithm will move to the next depth.
-        minSourcePoints: 100,
+        minSamplePoints: 100,
+        // If few points find neighbors, the transformation will be inaccurate.
+        // This parameter specifies a minimum number of neighbor matchups.
+        minSourceMatches: 50,
+        // If many source points find only a few unique target points as neighbors, the transformation will be inaccurate.
+        // This parameter specifies a minimum number of unique target point neighbors.
+        minTargetMatches: 20,
         convergenceFitness: 0,
         convergenceRMSE: 0,
         numIterations: 0,
-        // The algorithm assumes the user roughly aligned the pointcloud on the IFC model. After this alignment, points in the source pointcloud that are
-        // farther than this distance from any points in the target IFC model are considered irrelevant (this distance is measured before ICP's transformations)
-        parameters.maxSampleDistance = Math.max(...(["x","y","z"].map(dim=>targetModel.geometry.boundingBox.max[dim] - targetModel.geometry.boundingBox.min[dim])))
-        * 0.05;
         maxNeighborDistance: 0,
-        ifcSampleCount: 0
+        ifcSampleCount: 0,
+        // This number must be at least 1. The scale can only be multiplied or divided by this much at each depth of iterations.
+        maxScalePerIteration: 1.5
     };
 }
 
@@ -77,78 +82,128 @@ function updateDepthParameters(depth,pointcloud,targetModel,parameters) {
     parameters.convergenceRMSE = 0.01;
     // If no convergence is reached, increase the depth after this many iterations.
     parameters.numIterations = 2*2**(parameters.maxDepth-depth+1);
-    // The max range to search for neighboring points for matchups (this distance is measured after ICP's transformations)
-    parameters.maxNeighborDistance = Math.max(...(["x","y","z"].map(dim=>targetModel.geometry.boundingBox.max[dim] - targetModel.geometry.boundingBox.min[dim])))
-    * 0.05/2**depth;//3*pointcloud.pcoGeometry.spacing/2**depth;
+    // The algorithm assumes the user roughly aligned the pointcloud on the IFC model. After this alignment, points in the source pointcloud that are
+    // farther than this distance from any points in the target IFC model are considered irrelevant (this distance is measured before ICP's transformations)
+    parameters.maxSampleDistance = 0.05 * Math.max(...(["x","y","z"].map(dim=>targetModel.geometry.boundingBox.max[dim] - targetModel.geometry.boundingBox.min[dim])));
+    // The max range to search for neighbors (this distance is measured after ICP's transformations)
+    parameters.maxNeighborDistance = 0.05/2**depth * Math.max(...(["x","y","z"].map(dim=>targetModel.geometry.boundingBox.max[dim] - targetModel.geometry.boundingBox.min[dim])));//3*pointcloud.pcoGeometry.spacing/2**depth;
     // How many points to sample from the IFC mesh.
     parameters.ifcSampleCount = 10000*1.1**depth;
 }
 
 // The main function. 
-export async function MultiScaleICP(/*targetFilePath,*/ targetModel, sourcePointcloud, initialEstimate, clipVolume) {
+export async function multiScaleICP(/*targetFilePath,*/ targetModel, sourcePointcloud, initialEstimate, clipVolume) {
     let overallTransformation = new Mlmatrix([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]);
 
     // Parameters for ICP.
     let parameters = getOverallParameters();
 
-    // Lists of points.
-    console.log("Obtaining points from the IFC model.");
-    let targetPoints = getDistributedPlanePoints(targetModel,parameters.ifcSampleCount);
-    renderPoints(targetPoints, "green");
-    console.log(targetPoints.length + " IFC points");
-
-    console.log("Obtaining points from the pointcloud.");
-    sourcePointsPrecomputedValues = {maxDistance: parameters.maxSampleDistance, targetPoints:targetPoints};
-    let sourceMatrix = getPointcloudPointMatrix(parameters.pointcloudSampleCount, sourcePointcloud, maxDistanceNodeFilterMethod, sourcePointsPrecomputedValues, maxDistancePointFilterMethod, sourcePointsPrecomputedValues);
-    renderedSourcePointsObjects.push(renderPoints(sourceMatrix.data.map(point => new Vector3(point.toSpliced(-1))), "red"));
-    console.log(sourceMatrix.data.length + " pointcloud points.");
-
     // List of the red points objects put on screen, tracked so they can be rotated along with the source pointcloud.
     let renderedSourcePointsObjects = [];
 
-    for(let round = parameters.minRound; round <= parameters.maxRound; depth++) {
+    let sourceNodes = [];
+    let sourceMatrix = new Mlmatrix([]);
+    for(let depth = parameters.minDepth; depth <= parameters.maxDepth; depth++) {
         updateDepthParameters(depth,sourcePointcloud,targetModel,parameters);
 
-        // This is currently unused.
-        let weights = sourceMatrix.data.map(point=>1);
+        console.log("Obtaining points from the IFC model.");
+        // Obtain target points and put them in a kdTree.
+        let targetPoints = getDistributedPlanePoints(targetModel,parameters.ifcSampleCount);
+        let targetKdTree = new KDTree(targetPoints);
+        // Render points.
+        renderPoints(targetPoints, "green");
+        console.log(targetPoints.length + " IFC points");
 
-        let result = SingleDepthOfICPIterations(sourcePoints,targetPoints,weights,parameters);
+        console.log("Obtaining points from the pointcloud.");
+        // Obtain the next depth of points from the pointcloud and add them to the transformable matrix.
+        sourcePointsPrecomputedValues = {squaredMaxDistance: parameters.maxSampleDistance ** 2, targetKdTree:targetKdTree};
+        console.log("Getting nodes.");
+        sourceNodes = await getNextDepthOfNodes(depth, sourceNodes, sourcePointcloud, maxDistanceNodeFilterMethod, sourcePointsPrecomputedValues);
+        console.log("Getting points.");
+        let newSourceMatrix = await getPointsMatrixFromNodes(sourceNodes, sourcePointcloud, maxDistancePointFilterMethod, sourcePointsPrecomputedValues);
+        sourceMatrix = mlmatrixConcat(sourceMatrix,newSourceMatrix);
+        // Render points.
+        let renderPointsArray = [];
+        for(let i = 0; i < newSourceMatrix.columns; i++)
+            renderPointsArray.push(new Vector3(newSourceMatrix.data[0][i],newSourceMatrix.data[1][i],newSourceMatrix.data[2][i]));
+        renderedSourcePointsObjects.push(renderPoints(renderPointsArray, "red"));
+        console.log(sourceMatrix.columns + " pointcloud points.");
+        // Skip the ICP iterations if there aren't enough points yet.
+        if(sourceMatrix.columns < parameters.minSourcePoints) {
+            console.log("Not enough pointcloud points. Skipping to the next depth.");
+            continue;
+        }
+
+        // This is currently unused.
+        let weights = new Array(sourceMatrix.columns).fill(1);
+
+        // Perform one depth of ICP iterations, which transforms sourceMatrix.
+        let result = singleICPDepth(sourceMatrix,targetKdTree,weights,parameters);
         if(isNaN(result.scale) || result.scale === Infinity || result.scale === -Infinity || result.scale === 0) {
-            console.log("Scale became extreme. Aborting.");
+            console.log("Scale became extreme. Aborting with no useful results.");
             return new Matrix4();
         }
+
+        // Update the overall transformation that has been applied to the sourceMatrix.
         overallTransformation = result.transformation.mmul(overallTransformation);
+        // Apply the latest transformation to the pointcloud, and to the rendered source points.
         let transMatrix = mlmatrixToMatrix4(result.transformation);
         sourcePointcloud.applyMatrix4(transMatrix);
         renderedSourcePointsObjects.forEach(renderedPointsObject => renderedPointsObject.applyMatrix4(transMatrix));
 
         console.log(result.transformation);
     }
+    // Print the overall transformation obtained by the ICP.
     console.log(overallTransformation);
 }
 
-function SingleDepthOfICPIterations(sourcePoints,targetPoints,weights,parameters) {
+function singleICPDepth(sourceMatrix,targetKdTree,weights,parameters) {
     let result = {transformation:new Mlmatrix([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]), scale:1};
-    // Turn sourcePoints into a matrix that can be transformed.
-    console.log("Converting points array to matrix");
-    let sourceMatrix = convertPointsArrayToMatrix(sourcePoints);
 
-    // Choose neighbor points and put them in result.correspondences.
-    // Also put the percent of sourcePoints matched and the RMSE of the matched pairs in the result object.
-    console.log("Finding initial neighbor matchups");
-    let matchups = MatchNeighbors(sourceMatrix,targetPoints,parameters.maxNeighborDistance);
+    // Choose closest neighbors in maxNeighborDistance and put the pairings in neighborSet.neighborPairs.
+    // Also put the percent of sourcePoints that had neighbors in range in neighborSet.fitness, and the RMSE of the pairings in neighborSet.RMSE.
+    console.log("Finding initial neighbor pairings");
+    let neighborSet = findNeighbors(sourceMatrix,targetKdTree,parameters.maxNeighborDistance);
 
-    console.log("Initial: ","RMSE: " + matchups.RMSE, "% sourcepoints matched: " + matchups.fitness);
+    console.log("Initial: ","RMSE: " + neighborSet.RMSE, "% sourcepoints with neighbors: " + neighborSet.fitness);
     for(let i = 0; i < parameters.numIterations; i++) {
-        prevFitness = matchups.fitness;
-        prevRMSE = matchups.RMSE;
+        prevFitness = neighborSet.fitness;
+        prevRMSE = neighborSet.RMSE;
 
-        // Compute the optimal transformation for the given matchings of points. 
-        console.log("Computing best transformation for this matchup.");
-        let [tempTransform,tempScale] = ComputeTransformationPointToPoint(matchups.pairs,weights)
+        // Check for enough points matched.
+        if(neighborSet.neighborPairs.length < parameters.minSourceMatches) {
+            console.log("Too few source matches. Proceeding to next depth.");
+            break;
+        }
+        let targetMatches = [];
+        for(let t1 = 0; t1 < neighborSet.neighborPairs.length; t1++) {
+            let newPoint = neighborSet.neighborPairs[t1][1];
+            let alreadyPresent = false;
+            for(let t2 = 0; t2 < targetMatches.length; t2++)
+                if(newPoint.x == targetMatches[t2].x && newPoint.y == targetMatches[t2].y && newPoint.z == targetMatches[t2].z) {
+                  alreadyPresent = true;
+                  break;
+                }
+            if(!alreadyPresent) {
+                targetMatches.push(newPoint);
+                if(targetMatches.length >= parameters.minTargetMatches)
+                    break;
+            }
+        }
+        if(targetMatches.length < parameters.minTargetMatches) {
+            console.log("Too few unique target matches (" + targetMatches.length + "). Proceeding to next depth.");
+            break;
+        }
+
+        // Compute the optimal transformation for the given pairings of points. 
+        console.log("Computing best transformation from neighbor set.");
+        let minScale = (1/parameters.maxScalePerIteration)/result.scale;
+        let maxScale = parameters.maxScalePerIteration/result.scale;
+        let [tempTransform,tempScale] = getBestTransformation(neighborSet.neighborPairs,weights,minScale,maxScale)
 
         // If sourcePoints set contracts to 0 or expands to Infinity, quit before math exceptions occur.
         result.scale *= tempScale;
+        console.log(tempScale);
         if(isNaN(result.scale) || result.scale === Infinity || result.scale === -Infinity || result.scale === 0) {
             console.log("Scale became extreme. Aborting.");
             break;
@@ -157,95 +212,65 @@ function SingleDepthOfICPIterations(sourcePoints,targetPoints,weights,parameters
         result.transformation = tempTransform.mmul(result.transformation);
         sourceMatrix = tempTransform.mmul(sourceMatrix);
 
-        // Choose new neighbor points.
-        console.log("Finding new neighbor matchups");
-        matchups = MatchNeighbors(sourceMatrix,targetPoints,parameters.maxNeighborDistance);
+        // Choose new closest neighbors.
+        console.log("Finding new neighbor pairings");
+        neighborSet = findNeighbors(sourceMatrix,targetKdTree,parameters.maxNeighborDistance);
 
         // Possible causes: perfect fit, extremely few source points found neighbors, or sourcePoints shrank to 0.
         // In any case, further progress at this depth is impossible.
-        if(matchups.RMSE == 0) {
+        if(neighborSet.RMSE == 0) {
             console.log("RMSE is 0. Proceeding to next depth.");
             break;
         }
 
         // Check convergence thresholds to determine if the transformation has stopped improving.
-        if(Math.abs(prevFitness - matchups.fitness) < parameters.convergenceFitness 
-            && Math.abs(prevRMSE - matchups.RMSE) < parameters.convergenceRMSE) {
+        if(Math.abs(prevFitness - neighborSet.fitness) < parameters.convergenceFitness 
+            && Math.abs(prevRMSE - neighborSet.RMSE) < parameters.convergenceRMSE) {
                 console.log("Iterations have converged. Proceeding to next depth.");
                 break;
         }
     }
-    console.log("After: ","RMSE: " + matchups.RMSE, "% sourcepoints matched: " + matchups.fitness, "scale transformation: " + result.scale);
+    console.log("After: ","RMSE: " + neighborSet.RMSE, "% sourcepoints with neighbors: " + neighborSet.fitness, "scale transformation: " + result.scale);
     return result;
 }
 
-// Matches the transformed source points with their nearest neighbors in the target set, within maxNeighborDistance.
-function MatchNeighbors(sourceMatrix,targetPoints,maxNeighborDistance) {
-    let dims = sourceMatrix.rows - 1;
+// Pairs the transformed source points with their nearest neighbors in the target set, within maxNeighborDistance.
+function findNeighbors(sourceMatrix,targetKDTree,maxNeighborDistance) {
     let sourceCount = sourceMatrix.columns;
     let totalSquaredDistance = 0;
-    let pairs = Array(sourceCount);
+    let neighborPairs = new Array(sourceCount);
     for(let i = 0; i < sourceCount; i++) {
-        // Take a single column of the matrix, cutting off the row of 1s, to get a single point.
-        let sourcePoint = sourceMatrix.getColumn(i).slice(0,-1);
-        let bestPoint = null;
-        let bestDistance = maxNeighborDistance ** 2;
-        for(let j = 0; j < targetPoints.length; j++) {
-            let currentPoint = targetPoints[j];
-            let currentDistance = 0;
-            for(let dim = 0; dim < dims; dim++) {
-                currentDistance += (sourcePoint[dim]-currentPoint[dim])**2;
-                // Exit early to reduce computation, if it's already too far. This will happen most of the time.
-                if(currentDistance > bestDistance)
-                  break;
-            }
-            if(currentDistance < bestDistance) {
-                bestDistance = currentDistance;
-                bestPoint = currentPoint;
-            }
-        }
-        // If no close neighbor was found, point will still be null.
-        pairs[i] = [sourcePoint,bestPoint];
-        if(bestPoint)
-            totalSquaredDistance += bestDistance;
+        // Take a single column of the matrix, and turn it into a Vector3 point (ignoring the row of 1s automatically).
+        let sourcePoint = new Vector3(...sourceMatrix.getColumn(i));
+        // Get the closest neighbor in the target set.
+        neighborPairs[i] = [sourcePoint, targetKDTree.search(sourcePoint, maxNeighborDistance**2)]
     }
-    // Eliminate the null points
-    pairs = pairs.filter(correspondence=>{return correspondence[1] !== null});
-    // % of the sourcePoints that found neighbors in range.
-    let fitness = pairs.length/sourceCount;
+    // Eliminate the pairs that didn't find a point in range, and get fitness.
+    neighborPairs = neighborPairs.filter(correspondence => (correspondence[1][0] !== null));
+    let fitness = neighborPairs.length/sourceCount;
+    // Get RMSE, and cut out the distance of each pair because it is not needed.
+    for(let i = 0; i < neighborPairs.length; i++) {
+        totalSquaredDistance += neighborPairs[i][1][1];
+        neighborPairs[i][1] = neighborPairs[i][1][0];
+    }
     // Root Mean Squared Error between the source points and their neighbors.
-    let RMSE = (pairs.length == 0 ? 0 : Math.sqrt(totalSquaredDistance/pairs.length))
+    let RMSE = (neighborPairs.length == 0 ? 0 : Math.sqrt(totalSquaredDistance/neighborPairs.length))
     console.log(RMSE);
 
-    return {pairs: pairs, fitness:fitness, RMSE:RMSE}
+    return {neighborPairs: neighborPairs, fitness:fitness, RMSE:RMSE}
   }
 
-function convertPointsArrayToMatrix(points) {
-    let numPoints = points.length;
-    // See MultiScaleICP function for switching between vertex points and plane points.
-    // let dims = points[0].Coordinates.length; // For vertex points from the IFC data; the Test function doesn't work with this
-    let dims = points[0].length; // For plane points sampled from the mesh generated by IFCJS
-    let matrix = new Mlmatrix(dims,numPoints);
-    for(let c = 0; c < numPoints; c++)
-        // matrix.setColumn(c,points[c].Coordinates) // For vertex points
-        matrix.setColumn(c,points[c]) // For plane points
-    // This bottom row filled with 1s is needed for 4x4 transformation matrices to be applicable to the array.
-    matrix.addRow(matrix.rows,Mlmatrix.ones(1,numPoints));
-    return matrix;
-}
-
-function ComputeTransformationPointToPoint(correspondences,weights) {
-    let numPoints = correspondences.length
-    let dims = correspondences[0][0].length
-    let source_mat = new Mlmatrix(dims,numPoints);
-    let target_mat = new Mlmatrix(dims,numPoints);
+function getBestTransformation(neighborPairs,weights,minScale=0,maxScale=Infinity) {
+    let numPoints = neighborPairs.length
+    let source_mat = new Mlmatrix(3,numPoints);
+    let target_mat = new Mlmatrix(3,numPoints);
 
     for(let i = 0; i < numPoints; i++) {
-        source_mat.setColumn(i, correspondences[i][0]);
-        target_mat.setColumn(i, correspondences[i][1]);
+        source_mat.setColumn(i, neighborPairs[i][0].toArray());
+        target_mat.setColumn(i, neighborPairs[i][1].toArray());
     }
-
-    return getSimilarityTransformation(source_mat,target_mat,weights);
+    console.log(source_mat,target_mat)
+    return getSimilarityTransformation(source_mat,target_mat,weights,minScale,maxScale);
 }
 
 // Point to plane. Not fully implemented.
@@ -298,44 +323,44 @@ TransformVector6dToMatrix4d(input) {
 /**
  * Tests the functionality responsible for optimal transforming a source point list to minimize its sum of distances to 
  * corresponding entries in the target point list.
- * All weights are 1 here, because giving different weights to different point correspondences is currently an unused feature.
+ * All weights are 1 here, because giving different weights to different point pairs is currently an unused feature.
  * 
  * The example question and answer comes from https://zpl.fi/aligning-point-patterns-with-kabsch-umeyama-algorithm/
  */
-export function TestOptimalTransformationForIteration() {
+export function testGetBestTransformation() {
     let source = [
-        [232, 38],
-        [208, 32],
-        [181, 31],
-        [155, 45],
-        [142, 33],
-        [121, 59],
-        [139, 69]
+        [232, 38, 0],
+        [208, 32, 0],
+        [181, 31, 0],
+        [155, 45, 0],
+        [142, 33, 0],
+        [121, 59, 0],
+        [139, 69, 0]
     ];
     let target = [
-        [ 23, 178],
-        [ 66, 173],
-        [ 88, 187],
-        [119, 202],
-        [122, 229],
-        [170, 232],
-        [179, 199]
+        [ 23, 178, 0],
+        [ 66, 173, 0],
+        [ 88, 187, 0],
+        [119, 202, 0],
+        [122, 229, 0],
+        [170, 232, 0],
+        [179, 199, 0]
     ];
     let weights = [1,1,1,1,1,1,1];
 
-    let correspondences = [0,1,2,3,4,5,6].map(i => [source[i],target[i]])
+    let neighborPairs = [0,1,2,3,4,5,6].map(i => [new Vector3(...source[i]), new Vector3(...target[i])])
 
-    let result = ComputeTransformationPointToPoint(correspondences,weights);
+    let result = getBestTransformation(neighborPairs,weights);
 
-    let answer = result[0].mmul(convertPointsArrayToMatrix(source)).transpose().to2DArray();
+    let answer = result[0].mmul(array2DToMlmatrix(transposeArray2D(source))).transpose().to2DArray();
     let correctAnswer = [
-        [ 29.08878779, 152.36814188],
-        [ 52.37669337, 180.03008629],
-        [ 83.50028582, 204.33920503],
-        [126.28647155, 210.02515345],
-        [131.40664707, 235.37261559],
-        [178.54823113, 222.56285654],
-        [165.79288328, 195.30194121]
+        [ 29.08878779, 152.36814188, 0],
+        [ 52.37669337, 180.03008629, 0],
+        [ 83.50028582, 204.33920503, 0],
+        [126.28647155, 210.02515345, 0],
+        [131.40664707, 235.37261559, 0],
+        [178.54823113, 222.56285654, 0],
+        [165.79288328, 195.30194121, 0]
     ];
     let scale = result[1];
     let correctScale = 1.46166131;
@@ -382,4 +407,5 @@ function renderPoints(points, color, transformation) {
         pointsObject.applyMatrix4(mlmatrixToMatrix4(transformation));
 
     viewer.scene.scene.add(pointsObject);
+    return pointsObject;
 }

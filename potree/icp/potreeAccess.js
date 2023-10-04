@@ -15,48 +15,24 @@ import { waitForDef, matrix4ToMlmatrix } from "./utils"
       new Vector3(0,0,1).applyEuler(pointcloud.rotation)
     ];
 
+    // Project the clipVolume box onto each normal
     let clipVolumeProjections = getBoxProjections(normals, clipVolume, clipVolume);
 
     return {normals, clipVolumeProjections};
   }
-  
-  // maxDistancePrecomputedValues should be {maxDistance, targetPoints} where targetPoints is in Vector3 form.
 
   // Filtering method for nodes which only accepts nodes that may have points inside a box volume.
-  // According to the separating axis theorem, for two convex polyhedra, if the projections of the polyhedra overlap
-  // for each normal of both polyhedra's faces, then and only then do the polyhedra intersect. https://dyn4j.org/2010/01/sat/
   export function clipVolumeNodeFilterMethod({normals, clipVolumeProjections}, node, pointcloud) {
+    // Project the node bounding box onto each normal.
     let nodeProjections = getBoxProjections(normals, node, pointcloud);
 
-    return normals.every((normal,i) =>
+    // Compare the projections and check for overlap. 
+    // According to the separating axis theorem, two convex polyhedra intersect if and only if the projections of the polyhedra overlap
+    // for every normal of both polyhedra's faces. https://dyn4j.org/2010/01/sat/
+    return normals.every((_,i) =>
       // If the A's min <= B's max and A's max >= B's min, then A and B are overlapping.
       clipVolumeProjections[i][0] <= nodeProjections[i][1] && clipVolumeProjections[i][1] >= nodeProjections[i][0]
     )
-  }
-
-  // Filtering method for nodes which only accepts nodes that may have points within maxDistance of a target point.
-  export function maxDistanceNodeFilterMethod({maxDistance, targetPoints}, node, pointcloud) {
-    // I want to compare the bounding box and the target point in a frame of reference where the bounding box is axis-aligned,
-    // And I want to measure maxDistance in target point's units.
-    // So I apply scale to bounding box, but not rotation. This means I must apply reverse rotation and position to target point.
-    // Scale can be applied before rotation. All that matters is that position is applied last, or reverse position is applied first.
-    let min = node.boundingBox.min.clone().multiply(pointcloud.scale);
-    let max = node.boundingBox.max.clone().multiply(pointcloud.scale);
-
-    // This only matters if a component of pointcloud.scale is negative.
-    let newMin = new Vector3(Math.min(min.x,max.x), Math.min(min.y,max.y), Math.min(min.z,max.z))
-    let newMax = new Vector3(Math.max(min.x,max.x), Math.max(min.y,max.y), Math.max(min.z,max.z));
-
-    let reverseOrder = pointcloud.rotation.order[2] + pointcloud.rotation.order[1] + pointcloud.rotation.order[0]; // String reversal.
-    let reverseRotation = new Euler(-pointcloud.rotation.x, -pointcloud.rotation.y, -pointcloud.rotation.z, reverseOrder)
-
-    return targetPoints.some(targetPoint => {
-      let newTargetPoint = targetPoint.clone().sub(pointcloud.position).applyEuler(reverseRotation);
-      let x = Math.max(0, newTargetPoint.x - newMax.x, newMin.x - newTargetPoint.x);
-      let y = Math.max(0, newTargetPoint.y - newMax.y, newMin.y - newTargetPoint.y);
-      let z = Math.max(0, newTargetPoint.z - newMax.z, newMin.z - newTargetPoint.z);
-      return Math.sqrt(x**2 + y**2 + z**2) <= maxDistance;
-    })
   }
 
   // Filtering method for points which only accepts points inside a box volume. Expects point to be a Vector3.
@@ -67,15 +43,68 @@ import { waitForDef, matrix4ToMlmatrix } from "./utils"
     });
   }
 
-  // Filtering method for points which only accepts points within maxDistance of a target point. Expects point and targetPoints to be Vector3s.
-  export function maxDistancePointFilterMethod({maxDistance, targetPoints}, point) {
-    return targetPoints.some(targetPoint =>
-      (targetPoint.x - point[0])**2 + (targetPoint.y - point[1])**2 + (targetPoint.z - point[2])**2 < maxDistance**2
-    );
+  
+  // maxDistancePrecomputedValues should be {squaredMaxDistance, targetKdTree} where targetPoints are in Vector3 form.
+  
+  // Filtering method for nodes which only accepts nodes that may have points within maxDistance of a target point.
+  export function maxDistanceNodeFilterMethod({squaredMaxDistance, targetKdTree}, node, pointcloud) {
+    if(squaredMaxDistance < 0)
+      return false;
+    
+    let min = node.boundingBox.min.clone();
+    let max = node.boundingBox.max.clone();
+    
+    // Once the original bounding box is transformed (including rotation) widenedBox will be a new axis-aligned box that surrounds the old box
+    // such that any qualifying points must be inside it, and its size is as small as possible.
+    let widenedBoxMin = {x:Infinity, y:Infinity, z:Infinity};
+    let widenedBoxMax = {x:-Infinity, y:-Infinity, z:-Infinity};
+
+    [0,1,2,3,4,5,6,7].forEach(i => {
+      // Construct a different corner of the box for each number.
+      let x = i % 2;
+      let y = Math.floor(i / 2) % 2;
+      let z = Math.floor(i / 4);
+      let point = new Vector3(
+        x ? max.x : min.x,
+        y ? max.y : min.y,
+        z ? max.z : min.z
+      )
+      // Transform the corner according to pointcloud's transformation.
+      .multiply(pointcloud.scale).applyEuler(pointcloud.rotation).add(pointcloud.position);
+    
+      // Extend the widenedBox to contain it.
+      ["x","y","z"].forEach(dim => {
+        widenedBoxMin[dim] = Math.min(widenedBoxMin[dim],point[dim] - Math.sqrt(squaredMaxDistance));
+        widenedBoxMax[dim] = Math.max(widenedBoxMax[dim],point[dim] + Math.sqrt(squaredMaxDistance));
+      });
+    })
+
+    // Greatly reduce the size of the targetPoints to search by selecting only those in widenedBox.
+    let candidatePoints = targetKdTree.subsection(widenedBoxMin, widenedBoxMax);
+
+    // Apply scale to the bounding box, and reverse position and rotation to the targetPoints, because it's easier and equivalent to just applying scale then rotation then position to the bounding box.
+    min.multiply(pointcloud.scale);
+    max.multiply(pointcloud.scale);
+
+    let reverseOrder = pointcloud.rotation.order[2] + pointcloud.rotation.order[1] + pointcloud.rotation.order[0]; // String reversal.
+    let reverseRotation = new Euler(-pointcloud.rotation.x, -pointcloud.rotation.y, -pointcloud.rotation.z, reverseOrder);
+
+    return candidatePoints.some(targetPoint => {
+      let newTargetPoint = targetPoint.clone().sub(pointcloud.position).applyEuler(reverseRotation);
+      let x = Math.max(0, newTargetPoint.x - max.x, min.x - newTargetPoint.x);
+      let y = Math.max(0, newTargetPoint.y - max.y, min.y - newTargetPoint.y);
+      let z = Math.max(0, newTargetPoint.z - max.z, min.z - newTargetPoint.z);
+      return x**2 + y**2 + z**2 <= squaredMaxDistance;
+    });
+  }
+
+  // Filtering method for points which only accepts points within maxDistance of a target point. Expects point to be Vector3 and targetKdTree to be kdTree of Vector3 points.
+  export function maxDistancePointFilterMethod({squaredMaxDistance, targetKdTree}, point) {
+    return targetKdTree.searchExistence(point,squaredMaxDistance);
   }
 
   // If the normal was extended into an infinite line, and the box was projected onto this line, 
-  // this returns the interval that the projection covers. (Repeated for each normal).
+  // this returns the interval on the line that the projection covers. (Repeated for each normal).
   // Helper function for clipVolume methods.
   function getBoxProjections(normals, boundingBoxHolder, transformationHolder) {    
     let cornerPoints = [0,1,2,3,4,5,6,7].map(i => {
@@ -98,59 +127,60 @@ import { waitForDef, matrix4ToMlmatrix } from "./utils"
     );
   }
 
-  // Returns an array of the child nodes of the nodes in prevDepth, filtered according to nodeFilterMethod, and loaded so they can be accessed.
+  // If depth == 0, use the pointcloud's root. Else, take the children of the previous array of nodes.
+  // Filter according to nodeFilterMethod, and load so they can be accessed.
   // Precomputed values are values that are the same for all nodes/points and are expensive to compute every time. 
   // It is better to compute them just once and pass them into the function.
-  export async function getNextDepthOfNodes(prevDepth, pointcloud, nodeFilterMethod, nodeFilterPrecomputedValues) {
-    // Async map to get children of prevDepth.
-    let newDepth = (await Promise.all(prevDepth.map(async node =>
-      Object.values(await waitForDef(() => node.children))
-    )))
-    // Flatten into a 1D array.
-    .flat()
-    // Keep only the nodes that pass nodeFilterMethod.
-    .filter(node => nodeFilterMethod(nodeFilterPrecomputedValues, node, pointcloud));
-    // Add to newDepth.
-    return newDepth;
+  export async function getNextDepthOfNodes(depth, prevNodes, pointcloud, nodeFilterMethod, nodeFilterPrecomputedValues) {
+    let newNodes = [];
+    if(depth == 0)
+      newNodes = [await getRootNode(pointcloud)]
+    else
+      newNodes = (await Promise.all(prevNodes.map(async node =>
+        Object.values(await waitForDef(() => node.children))
+      ))).flat();
+    return newNodes.filter(node => nodeFilterMethod(nodeFilterPrecomputedValues, node, pointcloud));
   }
 
-  export async function getPointcloudPoints(N, pointcloud, nodeFilterMethod, nodeFilterPrecomputedValues, pointFilterMethod, pointFilterPrecomputedValues) {
+  // Open new depths of the pointcloud until at least N points have been obtained.
+  export async function getNPointcloudPoints(N, pointcloud, nodeFilterMethod, nodeFilterPrecomputedValues, pointFilterMethod, pointFilterPrecomputedValues) {
     let nodes = [];
-    let depth = 0;
     let points = [];
+    let depth = 0;
     while(points.length < N) {
-      if(depth == 0)
-        nodes = [await getRootNode(sourcePointcloud)];
-      else
-        nodes = await getNextDepthOfNodes(nodes, pointcloud, nodeFilterMethod, nodeFilterPrecomputedValues);
-      
+      // Get the next depth of nodes.
+      nodes = await getNextDepthOfNodes(depth, nodes, pointcloud, nodeFilterMethod, nodeFilterPrecomputedValues);
+      depth++;
+
+      // If all nodes have been exhausted, quit.
       if(nodes.length == 0)
         break;
       
+      // Add the points from these nodes.
       points = points.concat(await getPointsFromNodes(nodes,pointcloud,pointFilterMethod,pointFilterPrecomputedValues));
     }
     return points;
   }
 
-  // Returns an array of Vector3s representing points, taken from the given nodes, filtered according to pointFilterMethod.
-  export async function getPointsFromNodes(nodes, pointcloud, pointFilterMethod, pointFilterPrecomputedValues) {
-    let pointcloudMatrix =  
+  // Returns an mlmatrix containing the points, taken from the given nodes, filtered according to pointFilterMethod.
+  export async function getPointsMatrixFromNodes(nodes, pointcloud, pointFilterMethod, pointFilterPrecomputedValues) {
+    let pointcloudTransformation =  
     new Matrix4().makeTranslation(pointcloud.position.x,pointcloud.position.y,pointcloud.position.z).multiply(
       new Matrix4().makeScale(pointcloud.scale.x,pointcloud.scale.y,pointcloud.scale.z).multiply(
         new Matrix4().makeRotationFromEuler(pointcloud.rotation)
     ))
     return new Mlmatrix(
-      // Maps nodes to an array of promises for their points, then await to get an array of every array of points.
+      // Maps nodes to an array of promises for their points, then await to get an array of every array of points. Then flatten and filter to get an array of array-points.
       (await Promise.all(nodes.map(async node => {
+        // Extract point data from the node.
         loadNode(node);
-        // The transformation matrix to apply to the points of this node. The transformation and points matrices are transposed because it's faster that way.
-        let nodeTransformation = matrix4ToMlmatrix(
-          new Matrix4().multiplyMatrices(
-            pointcloudMatrix, 
-            new Matrix4().makeTranslation(node.boundingBox.min.x,node.boundingBox.min.y,node.boundingBox.min.z)
-        )).transpose();
+        let position = await waitForDef(()=>node.geometry?.attributes?.position);
+        // Each point is a row for now, because it make things faster. But it will be converted to columns later.
+        let pointsMatrix = Mlmatrix.from1DArray(node.numPoints,3,position.array)
+          // Add a column of ones for the 4D transformation matrix.
+          .addColumn((new Array(node.numPoints)).fill(1));
 
-        /* TEST CODE: Both of these should result in the same values. Currently passing. * /
+        /* TEST CODE: Tests node transformation. Both of these should result in the same values. Currently passing. * /
           console.log(new Vector3(1,4,3.7).applyMatrix4(new Matrix4().multiplyMatrices(
             pointcloudMatrix, 
             new Matrix4().makeTranslation(node.boundingBox.min.x,node.boundingBox.min.y,node.boundingBox.min.z)
@@ -159,20 +189,23 @@ import { waitForDef, matrix4ToMlmatrix } from "./utils"
           console.log(new Vector3(1,4,3.7).add(node.boundingBox.min).applyEuler(pointcloud.rotation).multiply(pointcloud.scale).add(pointcloud.position));
         /**/
 
-        // Extract point data from the node.
-        let position = await waitForDef(()=>node.geometry?.attributes?.position);
-        let pointsMatrix = Mlmatrix.from1DArray(node.numPoints,3,position.array)
-          // Add a column of ones for the 4D transformation matrix.
-          .addColumn((new Array(node.numPoints)).fill(1));
-        // Apply transformation matrix.
-        let transformedPoints = pointsMatrix.mmul(nodeTransformation);
-        return transformedPoints.data;
+        // The transformation matrix to apply to the points of this node. 
+        let nodeTransformation = matrix4ToMlmatrix(
+          new Matrix4().multiplyMatrices(
+            pointcloudTransformation, 
+            new Matrix4().makeTranslation(node.boundingBox.min.x,node.boundingBox.min.y,node.boundingBox.min.z)
+        ));
+        // Transpose the transformation and multiply it on the right instead of left, because pointsMatrix is transposed.
+        let transformedPointsMatrix = pointsMatrix.mmul(nodeTransformation.transpose());
+        console.log("transformed the points according to the node and pointcloud.")
+        // Filter points according to pointFilterMethod.
+        let filteredPointsArray = transformedPointsMatrix.data.filter(point => pointFilterMethod(pointFilterPrecomputedValues, new Vector3(...point)));
+        console.log("filtered points")
+        return filteredPointsArray;
       })))
       // Flatten to get a single array of points.
       .flat()
-      // Filter points according to pointFilterMethod.
-      .filter(point => pointFilterMethod(pointFilterPrecomputedValues, point))
-    )
+    ).transpose();
   }
 
   // Copies the root of the pointcloud so that loading its children doesn't affect which points are loaded in the rendered scene

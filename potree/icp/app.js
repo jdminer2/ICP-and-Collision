@@ -1,6 +1,6 @@
 import {IFCLoader} from "web-ifc-three/IFCLoader"
 import {AmbientLight, DirectionalLight, Matrix4, Object3D, Vector3, Box3, Euler, NormalBlending} from "three";
-import { MultiScaleICP, TestOptimalTransformationForIteration } from "./icp";
+import { multiScaleICP, testGetBestTransformation } from "./icp";
 import { VolumeTool } from "../src/utils/VolumeTool";
 import { BoxVolume } from "../src/utils/Volume";
 import { PointCloudOctree, PointCloudOctreeNode } from "../src/PointCloudOctree";
@@ -52,7 +52,7 @@ initialGuess = generateTransformationMatrix(-0.096187,0.074300,-0.024604,1.03438
 
 async function initialize() {
     loadViewer();
-    TestOptimalTransformationForIteration();
+    testGetBestTransformation();
     [viewer.schematic, viewer.pointcloud] = await Promise.all([
         loadIFC(ifcFilePath),
         loadPotree(potreeFilePath)
@@ -64,7 +64,7 @@ async function initialize() {
     window.removeEventListener("load",initialize);
     viewer.pointcloud.applyMatrix4(initialGuess);
     $('#runICPButton').on("click", (e)=>{
-        MultiScaleICP(viewer.schematic,viewer.pointcloud,generateTransformationMatrix(0,0,0,1,0,0,0),viewer.clipVolume).then(transformationMatrix=>
+        multiScaleICP(viewer.schematic,viewer.pointcloud,generateTransformationMatrix(0,0,0,1,0,0,0),viewer.clipVolume).then(transformationMatrix=>
             {}//applyICPResult(viewer.pointcloud,transformationMatrix)
         );
     });    
