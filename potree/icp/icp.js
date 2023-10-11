@@ -45,7 +45,9 @@ import { getDistributedPlanePoints, getRandomPlanePoints, getVertexPoints } from
 import { getPointsFromPointcloudUsingClipVolume, getPointsFromPointcloudUsingMaxDistance } from "./potreeAccess";
 import { getSimilarityTransformation } from "./umeyama";
 
-import {Points, PointsMaterial, BufferGeometry, BufferAttribute, Matrix4, Vector3} from "three";
+import {Points, PointsMaterial, BufferGeometry, Matrix4, Vector3} from "three";
+import { mlmatrixToMatrix4, array2DToMlmatrix, mlmatrixConcat, transposeArray2D } from "./utils";
+import { KDTree } from "./kdtree";
 
 // Tweakable. I am not sure the best parameters to set for these.
 function getOverallParameters() {
@@ -100,12 +102,13 @@ export async function MultiScaleICP(/*targetFilePath,*/ targetModel, sourcePoint
      // let targetPoints = await getVertexPoints(targetFilePath);
         // Sample points from the planes of the mesh proudced by IFCjs
         console.log("Obtaining points from the IFC model.")
-        let targetPoints = getDistributedPlanePoints(targetModel,parameters.ifcSampleCount);
+        let targetPoints = getDistributedPlanePoints(targetModel,parameters.ifcSampleCount).map(point=>new Vector3(...point))
+        let targetKdTree = new KDTree(targetPoints);
         console.log(targetPoints.length + " IFC points obtained")
 
         // Obtain points from the pointcloud
         console.log("Obtaining points from the pointcloud.")
-        sourcePoints = sourcePoints.concat(await getPointsFromPointcloudUsingMaxDistance(parameters.maxSampleDistance,targetPoints,depth,sourcePointcloud))
+        sourcePoints = sourcePoints.concat(await getPointsFromPointcloudUsingMaxDistance(parameters.maxSampleDistance**2,targetKdTree,depth,sourcePointcloud))
      // sourcePoints = sourcePoints.concat(await getPointsFromPointcloudUsingClipVolume(clipVolume,depth,sourcePointcloud));
         console.log(sourcePoints.length + " pointcloud points obtained.")
         // Weights are applied during the find-optimal-transformation stage, not the choose-neighbor-points stage.
@@ -117,7 +120,7 @@ export async function MultiScaleICP(/*targetFilePath,*/ targetModel, sourcePoint
             console.log("Too few source points were in range of the target at this depth. Skipping this depth.")
             continue;
         }
-        DoSingleScaleICPIterations(sourcePoints,targetPoints,weights,parameters,result);
+        DoSingleScaleICPIterations(sourcePoints,targetKdTree,weights,parameters,result);
         if(isNaN(result.scale) || result.scale === Infinity || result.scale === -Infinity || result.scale === 0) {
             console.log("Scale is invalid. Aborting.");
             return new Matrix4();
@@ -133,7 +136,7 @@ export async function MultiScaleICP(/*targetFilePath,*/ targetModel, sourcePoint
     return;
 }
 
-function DoSingleScaleICPIterations(sourcePoints,targetPoints,weights,parameters,result) {
+function DoSingleScaleICPIterations(sourcePoints,targetKdTree,weights,parameters,result) {
 
     // Turn sourcePoints into a matrix that can be transformed, and apply result.transformation to it.
     console.log("Convert points array to matrix")
@@ -142,7 +145,7 @@ function DoSingleScaleICPIterations(sourcePoints,targetPoints,weights,parameters
     // Choose neighbor points and put them in result.correspondences.
     // Also put the percent of sourcePoints matched and the RMSE of the matched pairs in the result object.
     console.log("Find initial neighbor matchups")
-    UpdateRegistrationResult(sourceMatrix,targetPoints,parameters.maxNeighborDistance,result)
+    UpdateRegistrationResult(sourceMatrix,targetKdTree,parameters.maxNeighborDistance,result)
 
     console.log("Before: ","RMSE: " + result.inlier_rmse, "% sourcepoints matched: " + result.fitness, "scale transformation: " + result.scale)
     for(let i = 0; i < parameters.numIterations; i++) {
@@ -174,7 +177,7 @@ function DoSingleScaleICPIterations(sourcePoints,targetPoints,weights,parameters
         // Choose new neighbor points and put them in result.correspondences.
         // Also update result.inlier_rmse and result.fitness.
         console.log("Find new neighbor matchups")
-        UpdateRegistrationResult(sourceMatrix,targetPoints,parameters.maxNeighborDistance,result)
+        UpdateRegistrationResult(sourceMatrix,targetKdTree,parameters.maxNeighborDistance,result)
         
         console.log("RMSE " + result.inlier_rmse)
 
@@ -192,40 +195,28 @@ function DoSingleScaleICPIterations(sourcePoints,targetPoints,weights,parameters
 // result.correspondences: neighbors for each source point in the target points, if it has a neighbor within maxNeighborDistance.
 // result.fitness: % of the source points that have neighbors within maxNeighborDistance
 // result.inlier_rmse: root mean squared distance between neighbors.
-function UpdateRegistrationResult(sourceMatrix,targetPoints,maxNeighborDistance,result) {
+function UpdateRegistrationResult(sourceMatrix,targetKdTree,maxNeighborDistance,result) {
     let squaredError = 0;
     let sourceCount = sourceMatrix.columns;
-    let dims = sourceMatrix.rows - 1;
 
     result.correspondences = Array(sourceMatrix.columns);
     for(let i = 0; i < sourceCount; i++) {
         // Take a single column of the matrix, cutting off the row of 1s, to get a single point.
-        let sourcePoint = sourceMatrix.getColumn(i).slice(0,-1);
-        let bestNeighbor = {bestPoint:null, bestDistance:maxNeighborDistance ** 2}
-        for(let j = 0; j < targetPoints.length; j++) {
-            let currentDistance = 0;
-            let targetPoint = targetPoints[j]
-            for(let dim = 0; dim < dims; dim++) {
-                currentDistance += (sourcePoint[dim]-targetPoint[dim])**2;
-                // Exit early to reduce computation, if it's already guaranteed the point will be too far away.
-                if(currentDistance > bestNeighbor.bestDistance)
-                  break;
-            }
-            if(currentDistance < bestNeighbor.bestDistance)
-            bestNeighbor = {bestPoint:targetPoint, bestDistance:currentDistance};
-        }
-        // If no close neighbor was found, point will still be null.
-        if(bestNeighbor.bestPoint) {
-            result.correspondences[i] = [sourcePoint, bestNeighbor.bestPoint];
-            squaredError += bestNeighbor.bestDistance;
-        }
+        let sourcePoint = new Vector3(...sourceMatrix.getColumn(i));
+        // Find the nearest neighbor in range, if there is one.
+        result.correspondences[i] = [sourcePoint, targetKdTree.search(sourcePoint, maxNeighborDistance**2)];
     }
-    // Eliminate the null points
-    result.correspondences = result.correspondences.filter(e=>e);
+    // Filter out the failures.
+    result.correspondences = result.correspondences.filter(correspondence => (correspondence[1][0] !== null));
     
-    let numCorrespondences = result.correspondences.length
-  
-    result.fitness = numCorrespondences/sourceMatrix.columns
+    // Compute fitness
+    let numCorrespondences = result.correspondences.length;
+    result.fitness = numCorrespondences/sourceMatrix.columns;
+    // Compute RMSE and discard individual point distances.
+    for(let i = 0; i < result.correspondences.length; i++) {
+        squaredError += result.correspondences[i][1][1];
+        result.correspondences[i][1] = result.correspondences[i][1][0];
+    }
     result.inlier_rmse = (numCorrespondences == 0 ? 0 : Math.sqrt(squaredError/numCorrespondences))
   }
 
@@ -245,13 +236,12 @@ function convertPointsArrayToMatrix(points) {
 
 function ComputeTransformationPointToPoint(correspondences,weights) {
     let numPoints = correspondences.length
-    let dims = correspondences[0][0].length
-    let source_mat = new Matrix(dims,numPoints);
-    let target_mat = new Matrix(dims,numPoints);
+    let source_mat = new Matrix(3,numPoints);
+    let target_mat = new Matrix(3,numPoints);
 
     for(let i = 0; i < numPoints; i++) {
-        source_mat.setColumn(i, correspondences[i][0]);
-        target_mat.setColumn(i, correspondences[i][1]);
+        source_mat.setColumn(i, correspondences[i][0].toArray());
+        target_mat.setColumn(i, correspondences[i][1].toArray());
     }
 
     return getSimilarityTransformation(source_mat,target_mat,weights);
@@ -317,38 +307,38 @@ TransformVector6dToMatrix4d(input) {
  */
 export function TestOptimalTransformationForIteration() {
     let source = [
-        [232, 38],
-        [208, 32],
-        [181, 31],
-        [155, 45],
-        [142, 33],
-        [121, 59],
-        [139, 69]
+        [232, 38, 0],
+        [208, 32, 0],
+        [181, 31, 0],
+        [155, 45, 0],
+        [142, 33, 0],
+        [121, 59, 0],
+        [139, 69, 0]
     ];
     let target = [
-        [ 23, 178],
-        [ 66, 173],
-        [ 88, 187],
-        [119, 202],
-        [122, 229],
-        [170, 232],
-        [179, 199]
+        [ 23, 178, 0],
+        [ 66, 173, 0],
+        [ 88, 187, 0],
+        [119, 202, 0],
+        [122, 229, 0],
+        [170, 232, 0],
+        [179, 199, 0]
     ];
     let weights = [1,1,1,1,1,1,1];
 
-    let correspondences = [0,1,2,3,4,5,6].map(i => [source[i],target[i]])
+    let correspondences = [0,1,2,3,4,5,6].map(i => [new Vector3(...source[i]),new Vector3(...target[i])])
 
     let result = ComputeTransformationPointToPoint(correspondences,weights);
 
-    let answer = result[0].mmul(convertPointsArrayToMatrix(source)).transpose().to2DArray();
+    let answer = result[0].mmul(array2DToMlmatrix(transposeArray2D(source))).transpose().to2DArray();
     let correctAnswer = [
-        [ 29.08878779, 152.36814188],
-        [ 52.37669337, 180.03008629],
-        [ 83.50028582, 204.33920503],
-        [126.28647155, 210.02515345],
-        [131.40664707, 235.37261559],
-        [178.54823113, 222.56285654],
-        [165.79288328, 195.30194121]
+        [ 29.08878779, 152.36814188, 0],
+        [ 52.37669337, 180.03008629, 0],
+        [ 83.50028582, 204.33920503, 0],
+        [126.28647155, 210.02515345, 0],
+        [131.40664707, 235.37261559, 0],
+        [178.54823113, 222.56285654, 0],
+        [165.79288328, 195.30194121, 0]
     ];
     let scale = result[1];
     let correctScale = 1.46166131;
@@ -387,7 +377,7 @@ export function TestOptimalTransformationForIteration() {
 
 function renderPoints(points, color, transformation) {
     let pointsObject = new Points(
-        new BufferGeometry().setFromPoints(points.map(point => new Vector3(...point))), 
+        new BufferGeometry().setFromPoints(points), 
         new PointsMaterial({color:color, size: 1, sizeAttenuation: false})
     );
 

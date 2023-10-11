@@ -62,40 +62,63 @@ import { BufferGeometry, BufferAttribute, Euler, Vector3 } from "../libs/three.j
     );
   }
 
-  export async function getPointsFromPointcloudUsingMaxDistance(maxDistance,targetPoints,depth,pointcloud) {
-    let targetPointObjects = targetPoints.map(point => new Vector3(...point))
+  export async function getPointsFromPointcloudUsingMaxDistance(squaredMaxDistance,targetKdTree,depth,pointcloud) {
     return await getPointsRecursive(await getRootNode(pointcloud), depth, pointcloud, 
-      nodeInMaxDistance, {maxDistance, targetPointObjects}, 
-      pointInMaxDistance, {maxDistance, targetPointObjects}
+      nodeInMaxDistance, {squaredMaxDistance, targetKdTree}, 
+      pointInMaxDistance, {squaredMaxDistance, targetKdTree}
     )
   }
 
-  function nodeInMaxDistance({maxDistance, targetPointObjects}, node, pointcloud) {
+  function nodeInMaxDistance({squaredMaxDistance, targetKdTree}, node, pointcloud) {
+    if(squaredMaxDistance < 0)
+      return false;
     // I want to compare the bounding box and the target point in a frame of reference where the bounding box is axis-aligned,
     // And I want to measure maxDistance in target point's units.
     // So I apply scale to bounding box, but not rotation. This means I must apply reverse rotation and position to target point.
     // Scale can be applied before rotation. All that matters is that position is applied last, or reverse position is applied first.
-    let min = node.boundingBox.min.clone().multiply(pointcloud.scale);
-    let max = node.boundingBox.max.clone().multiply(pointcloud.scale);
+    let min = node.boundingBox.min.clone();
+    let max = node.boundingBox.max.clone();
 
-    // This only matters if a component of pointcloud.scale is negative.
-    let newMin = new Vector3(Math.min(min.x,max.x), Math.min(min.y,max.y), Math.min(min.z,max.z))
-    let newMax = new Vector3(Math.max(min.x,max.x), Math.max(min.y,max.y), Math.max(min.z,max.z));
+    // The axis-aligned bounding box will be transformed to no longer be axis-aligned.
+    // We will make a new axis-aligned box that contains all points within maxDistance of transformed bounding box
+    let widenedBoxMin = {x:Infinity, y:Infinity, z:Infinity};
+    let widenedBoxMax = {x:-Infinity, y:-Infinity, z:-Infinity};
 
-    let reverseOrder = pointcloud.rotation.order[2] + pointcloud.rotation.order[1] + pointcloud.rotation.order[0];
+    for(let i = 0; i < 8; i++) {
+      let corner = new Vector3(
+        (i % 2 ? max : min).x,
+        (Math.floor(i/2) % 2 ? max : min).y,
+        (Math.floor(i/4) % 2 ? max : min).z
+      );
+      // Transform the corner acording to pointcloud's transformation.
+      transformedCorner = corner.multiply(pointcloud.scale).applyEuler(pointcloud.rotation).add(pointcloud.position);
+      // Widen the box.
+      ["x","y","z"].forEach(dim=>{
+        widenedBoxMin[dim] = Math.min(transformedCorner[dim] - Math.sqrt(squaredMaxDistance), widenedBoxMin[dim]);
+        widenedBoxMax[dim] = Math.max(transformedCorner[dim] + Math.sqrt(squaredMaxDistance), widenedBoxMax[dim]);
+      })
+    }
+
+    // Reduce the number of targetPoints to search by only checking inside widenedBox.
+    let candidatePoints = targetKdTree.subsection(widenedBoxMin, widenedBoxMax);
+
+    min.multiply(pointcloud.scale);
+    max.multiply(pointcloud.scale);
+    let reverseOrder = pointcloud.rotation.order[2] + pointcloud.rotation.order[1] + pointcloud.rotation.order[0]; // String reversal.
     let reverseRotation = new Euler(-pointcloud.rotation.x, -pointcloud.rotation.y, -pointcloud.rotation.z, reverseOrder)
 
-    return targetPointObjects.some(targetPoint => {
+    // Check if any candidate point is actually within maxDistance of a targetPoint.
+    return candidatePoints.some(targetPoint => {
       let newTargetPoint = targetPoint.clone().sub(pointcloud.position).applyEuler(reverseRotation);
-      let x = Math.max(0, newTargetPoint.x - newMax.x, newMin.x - newTargetPoint.x);
-      let y = Math.max(0, newTargetPoint.y - newMax.y, newMin.y - newTargetPoint.y);
-      let z = Math.max(0, newTargetPoint.z - newMax.z, newMin.z - newTargetPoint.z);
-      return Math.sqrt(x**2 + y**2 + z**2) <= maxDistance;
+      let x = Math.max(0, newTargetPoint.x - max.x, min.x - newTargetPoint.x);
+      let y = Math.max(0, newTargetPoint.y - max.y, min.y - newTargetPoint.y);
+      let z = Math.max(0, newTargetPoint.z - max.z, min.z - newTargetPoint.z);
+      return x**2 + y**2 + z**2 <= squaredMaxDistance;
     })
   }
 
-  function pointInMaxDistance({maxDistance, targetPointObjects}, point) {
-    return targetPointObjects.some(targetPoint => targetPoint.distanceTo(point) <= maxDistance);
+  function pointInMaxDistance({squaredMaxDistance, targetKdTree}, point) {
+    return targetKdTree.searchExistence(point,squaredMaxDistance);
   }
 
   // Returns the points in the specified node, and its descendants to the specified depth. 
@@ -114,7 +137,7 @@ import { BufferGeometry, BufferAttribute, Euler, Vector3 } from "../libs/three.j
     // If reached the target depth, take the points.
     if(depth == 0) {
       // Extract points from the node
-      let position = await waitForDef(()=>node.geometry?.attributes?.position);
+      let position = await waitForDef(()=>node.position);
       let points = Array(position.array.length/position.itemSize);
       for(let i = 0; i < position.array.length/position.itemSize; i++) {
         // Transform the point data according to bounding box and pointcloud's transformations.
@@ -215,33 +238,20 @@ import { BufferGeometry, BufferAttribute, Euler, Vector3 } from "../libs/three.j
       let worker = Potree.workerPool.getWorker(workerPath);
 
       worker.onmessage = function (e) {
-
-        let data = e.data;
-        let buffers = data.attributeBuffers;
+        let buffers = e.data.attributeBuffers;
 
         Potree.workerPool.returnWorker(workerPath, worker);
-
-        let geometry = new BufferGeometry();
         
-        for(let property in buffers)
-          if(property === "position"){
-            let buffer = buffers[property].buffer;
-            geometry.setAttribute('position', new BufferAttribute(new Float32Array(buffer), 3));
-          }
-
-        node.density = data.density;
-        node.geometry = geometry;
+        node.position = new BufferAttribute(new Float32Array(buffers["position"].buffer), 3);
       };
 
       let pointAttributes = node.octreeGeometry.pointAttributes;
       let scale = node.octreeGeometry.scale;
-
       let box = node.boundingBox;
       let min = node.octreeGeometry.offset.clone().add(box.min);
       let size = box.max.clone().sub(box.min);
       let max = min.clone().add(size);
       let numPoints = node.numPoints;
-
       let offset = node.octreeGeometry.loader.offset;
 
       let message = {
