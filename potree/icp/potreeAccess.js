@@ -174,7 +174,7 @@ import { waitForDef, matrix4ToMlmatrix } from "./utils"
       (await Promise.all(nodes.map(async node => {
         // Extract point data from the node.
         loadNode(node);
-        let position = await waitForDef(()=>node.geometry?.attributes?.position);
+        let position = await waitForDef(()=>node.position);
         // Each point is a row for now, because it make things faster. But it will be converted to columns later.
         let pointsMatrix = Mlmatrix.from1DArray(node.numPoints,3,position.array)
           // Add a column of ones for the 4D transformation matrix.
@@ -278,22 +278,11 @@ import { waitForDef, matrix4ToMlmatrix } from "./utils"
       let worker = Potree.workerPool.getWorker(workerPath);
 
       worker.onmessage = function (e) {
-
-        let data = e.data;
-        let buffers = data.attributeBuffers;
+        let buffers = e.data.attributeBuffers;
 
         Potree.workerPool.returnWorker(workerPath, worker);
-
-        let geometry = new BufferGeometry();
         
-        for(let property in buffers)
-          if(property === "position"){
-            let buffer = buffers[property].buffer;
-            geometry.setAttribute('position', new BufferAttribute(new Float32Array(buffer), 3));
-          }
-
-        node.density = data.density;
-        node.geometry = geometry;
+        node.position = new BufferAttribute(new Float32Array(buffers["position"].buffer), 3);
       };
 
       let pointAttributes = node.octreeGeometry.pointAttributes;
@@ -304,7 +293,6 @@ import { waitForDef, matrix4ToMlmatrix } from "./utils"
       let size = box.max.clone().sub(box.min);
       let max = min.clone().add(size);
       let numPoints = node.numPoints;
-
       let offset = node.octreeGeometry.loader.offset;
 
       let message = {
