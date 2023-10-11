@@ -85,9 +85,9 @@ import {determinant,Matrix as Mlmatrix,SVD} from "ml-matrix"
 export function getSimilarityTransformation(fromPoints,
                                      toPoints,
                                      weights,
-                                     allowReflection = false,
                                      minScale = 0,
-                                     maxScale = Infinity) {
+                                     maxScale = Infinity,
+                                     allowReflection = false) {
     const dimensions = fromPoints.rows;
 
     // 1. Compute the rotation.
@@ -126,6 +126,7 @@ export function getSimilarityTransformation(fromPoints,
     // The optimal bounded scale is the closest bounded value to the optimal unbouned scale.
     // Scale-bounding does not affect optimal rotation, as long as scale is positive (it should be if the weights are nonnegative). 
     // The optimal translation with scale-bounding can be obtained by plugging in the new scale to the same translation equation.
+    console.log(minScale, scale, maxScale);
     if(scale < minScale)
         scale = minScale;
     if(scale > maxScale)

@@ -42,7 +42,9 @@ Please cite our work if you use Open3D.
 
 import { Matrix as Mlmatrix } from "ml-matrix";
 import { getDistributedPlanePoints } from "./ifcAccess";
-import { getNextDepthOfNodes, getPointsMatrixFromNodes, maxDistanceNodeFilterMethod, maxDistancePointFilterMethod } from "./potreeAccess";
+import { getNextDepthOfNodes, getPointsMatrixFromNodes } from "./potreeAccess";
+//import { maxDistanceNodeFilterMethod, maxDistancePointFilterMethod } from "./potreAccess";
+import { clipVolumePrecomputedValues, clipVolumeNodeFilterMethod, clipVolumePointFilterMethod } from "./potreeAccess";
 import { getSimilarityTransformation } from "./umeyama";
 
 import {Points, PointsMaterial, BufferGeometry, Matrix4, Vector3} from "three";
@@ -54,7 +56,7 @@ function getOverallParameters() {
     return {
         // Min and max (inclusive) depths to search in the pointcloud's octree. There is one set of iterations per depth. 
         // Depth 0 is the root of the tree, and depths greater than the tree's depth just take the full tree.
-        minDepth: 0,
+        minDepth: 4,
         maxDepth: 5,
         // At shallow depths, sometimes no or very few points will be selected from the source pointcloud, and the transformation will be inaccurate.
         // This parameter specifies a minimum number of found source points. If it is not met, the algorithm will move to the next depth.
@@ -71,7 +73,9 @@ function getOverallParameters() {
         maxNeighborDistance: 0,
         ifcSampleCount: 0,
         // This number must be at least 1. The scale can only be multiplied or divided by this much at each depth of iterations.
-        maxScalePerIteration: 1.5
+        // maxScalePerIteration: 1.1,
+        // This number must be at least 1. The scale can only be multiplied or divided by this much overall.
+        maxScaleChange: 1.1
     };
 }
 
@@ -103,7 +107,7 @@ export async function multiScaleICP(/*targetFilePath,*/ targetModel, sourcePoint
 
     let sourceNodes = [];
     let sourceMatrix = new Mlmatrix([]);
-    for(let depth = parameters.minDepth; depth <= parameters.maxDepth; depth++) {
+    for(let depth = 0; depth <= parameters.maxDepth; depth++) {
         updateDepthParameters(depth,sourcePointcloud,targetModel,parameters);
 
         console.log("Obtaining points from the IFC model.");
@@ -116,11 +120,12 @@ export async function multiScaleICP(/*targetFilePath,*/ targetModel, sourcePoint
 
         console.log("Obtaining points from the pointcloud.");
         // Obtain the next depth of points from the pointcloud and add them to the transformable matrix.
-        sourcePointsPrecomputedValues = {squaredMaxDistance: parameters.maxSampleDistance ** 2, targetKdTree:targetKdTree};
+        precomputedValues = clipVolumePrecomputedValues(clipVolume,sourcePointcloud)
+        // precomputedValues = {squaredMaxDistance: parameters.maxSampleDistance ** 2, targetKdTree:targetKdTree};
         console.log("Getting nodes.");
-        sourceNodes = await getNextDepthOfNodes(depth, sourceNodes, sourcePointcloud, maxDistanceNodeFilterMethod, sourcePointsPrecomputedValues);
+        sourceNodes = await getNextDepthOfNodes(depth, sourceNodes, sourcePointcloud, clipVolumeNodeFilterMethod, precomputedValues);
         console.log("Getting points.");
-        let newSourceMatrix = await getPointsMatrixFromNodes(sourceNodes, sourcePointcloud, maxDistancePointFilterMethod, sourcePointsPrecomputedValues);
+        let newSourceMatrix = await getPointsMatrixFromNodes(sourceNodes, sourcePointcloud, clipVolumePointFilterMethod, precomputedValues);
         sourceMatrix = mlmatrixConcat(sourceMatrix,newSourceMatrix);
         // Render points.
         let renderPointsArray = [];
@@ -137,35 +142,39 @@ export async function multiScaleICP(/*targetFilePath,*/ targetModel, sourcePoint
         // This is currently unused.
         let weights = new Array(sourceMatrix.columns).fill(1);
 
-        // Perform one depth of ICP iterations, which transforms sourceMatrix.
-        let result = singleICPDepth(sourceMatrix,targetKdTree,weights,parameters);
-        if(isNaN(result.scale) || result.scale === Infinity || result.scale === -Infinity || result.scale === 0) {
-            console.log("Scale became extreme. Aborting with no useful results.");
-            return new Matrix4();
+        if(depth >= parameters.minDepth) {
+            let scale = 1;
+            // Perform one depth of ICP iterations, which transforms sourceMatrix.
+            let result = singleICPDepth(sourceMatrix,targetKdTree,weights,parameters,scale);
+            scale = result.scale;
+            if(isNaN(scale) || scale === Infinity || scale === -Infinity || scale === 0) {
+                console.log("Scale became extreme. Aborting with no useful results.");
+                return new Matrix4();
+            }
+
+            // Update the overall transformation that has been applied to the sourceMatrix.
+            overallTransformation = result.transformation.mmul(overallTransformation);
+            // Apply the latest transformation to the pointcloud, and to the rendered source points.
+            let transMatrix = mlmatrixToMatrix4(result.transformation);
+            sourcePointcloud.applyMatrix4(transMatrix);
+            renderedSourcePointsObjects.forEach(renderedPointsObject => renderedPointsObject.applyMatrix4(transMatrix));
+
+            console.log(result.transformation);
         }
-
-        // Update the overall transformation that has been applied to the sourceMatrix.
-        overallTransformation = result.transformation.mmul(overallTransformation);
-        // Apply the latest transformation to the pointcloud, and to the rendered source points.
-        let transMatrix = mlmatrixToMatrix4(result.transformation);
-        sourcePointcloud.applyMatrix4(transMatrix);
-        renderedSourcePointsObjects.forEach(renderedPointsObject => renderedPointsObject.applyMatrix4(transMatrix));
-
-        console.log(result.transformation);
     }
     // Print the overall transformation obtained by the ICP.
     console.log(overallTransformation);
 }
 
-function singleICPDepth(sourceMatrix,targetKdTree,weights,parameters) {
-    let result = {transformation:new Mlmatrix([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]), scale:1};
+function singleICPDepth(sourceMatrix,targetKdTree,weights,parameters,scale) {
+    let result = {transformation:new Mlmatrix([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]), scale:scale};
 
     // Choose closest neighbors in maxNeighborDistance and put the pairings in neighborSet.neighborPairs.
     // Also put the percent of sourcePoints that had neighbors in range in neighborSet.fitness, and the RMSE of the pairings in neighborSet.RMSE.
     console.log("Finding initial neighbor pairings");
     let neighborSet = findNeighbors(sourceMatrix,targetKdTree,parameters.maxNeighborDistance);
 
-    console.log("Initial: ","RMSE: " + neighborSet.RMSE, "% sourcepoints with neighbors: " + neighborSet.fitness);
+    console.log("Before: ","RMSE: " + neighborSet.RMSE, "; % sourcepoints with neighbors: " + neighborSet.fitness);
     for(let i = 0; i < parameters.numIterations; i++) {
         prevFitness = neighborSet.fitness;
         prevRMSE = neighborSet.RMSE;
@@ -197,13 +206,12 @@ function singleICPDepth(sourceMatrix,targetKdTree,weights,parameters) {
 
         // Compute the optimal transformation for the given pairings of points. 
         console.log("Computing best transformation from neighbor set.");
-        let minScale = (1/parameters.maxScalePerIteration)/result.scale;
-        let maxScale = parameters.maxScalePerIteration/result.scale;
+        let minScale = (1/parameters.maxScaleChange)/result.scale;
+        let maxScale = parameters.maxScaleChange/result.scale;
         let [tempTransform,tempScale] = getBestTransformation(neighborSet.neighborPairs,weights,minScale,maxScale)
 
         // If sourcePoints set contracts to 0 or expands to Infinity, quit before math exceptions occur.
         result.scale *= tempScale;
-        console.log(tempScale);
         if(isNaN(result.scale) || result.scale === Infinity || result.scale === -Infinity || result.scale === 0) {
             console.log("Scale became extreme. Aborting.");
             break;
@@ -230,7 +238,7 @@ function singleICPDepth(sourceMatrix,targetKdTree,weights,parameters) {
                 break;
         }
     }
-    console.log("After: ","RMSE: " + neighborSet.RMSE, "% sourcepoints with neighbors: " + neighborSet.fitness, "scale transformation: " + result.scale);
+    console.log("After: ","RMSE: " + neighborSet.RMSE, "; % sourcepoints with neighbors: " + neighborSet.fitness, "scale transformation: " + result.scale);
     return result;
 }
 
@@ -255,7 +263,7 @@ function findNeighbors(sourceMatrix,targetKDTree,maxNeighborDistance) {
     }
     // Root Mean Squared Error between the source points and their neighbors.
     let RMSE = (neighborPairs.length == 0 ? 0 : Math.sqrt(totalSquaredDistance/neighborPairs.length))
-    console.log(RMSE);
+    console.log("RMSE:" + RMSE);
 
     return {neighborPairs: neighborPairs, fitness:fitness, RMSE:RMSE}
   }
