@@ -668,7 +668,10 @@ export class Viewer extends EventDispatcher{
 	setSchematicOpacity (value) {
 		if (this.schematicOpacity !== value) {
 			this.schematicOpacity = value;
-			this.schematic.material.forEach(material => material.opacity = value);
+			if(Array.isArray(this.schematic.material))
+				this.schematic.material.forEach(material => material.opacity = value);
+			else
+				this.schematic.material.opacity = value;
 			if(value == 0)
 				this.schematic.visible = false;
 			else

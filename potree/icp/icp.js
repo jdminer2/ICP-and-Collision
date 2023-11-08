@@ -40,10 +40,10 @@ Please cite our work if you use Open3D.
 "
  */
 
-import { Matrix as Mlmatrix } from "ml-matrix";
-import { getDistributedPlanePoints } from "./ifcAccess";
-import { getNextDepthOfNodes, getPointsMatrixFromNodes } from "./potreeAccess";
-//import { maxDistanceNodeFilterMethod, maxDistancePointFilterMethod } from "./potreAccess";
+import { Matrix as Mlmatrix, inverse } from "ml-matrix";
+import { getRandomSurfacePoints, getDistributedSurfacePoints } from "./ifcAccess";
+import { getNPointsMatrix, getRootNode } from "./potreeAccess";
+import { maxDistanceNodeFilterMethod, maxDistancePointFilterMethod } from "./potreeAccess";
 import { clipVolumePrecomputedValues, clipVolumeNodeFilterMethod, clipVolumePointFilterMethod } from "./potreeAccess";
 import { getSimilarityTransformation } from "./umeyama";
 
@@ -56,8 +56,8 @@ function getOverallParameters() {
     return {
         // Min and max (inclusive) depths to search in the pointcloud's octree. There is one set of iterations per depth. 
         // Depth 0 is the root of the tree, and depths greater than the tree's depth just take the full tree.
-        minDepth: 4,
-        maxDepth: 5,
+        minDepth: 0,
+        maxDepth: 3,
         // At shallow depths, sometimes no or very few points will be selected from the source pointcloud, and the transformation will be inaccurate.
         // This parameter specifies a minimum number of found source points. If it is not met, the algorithm will move to the next depth.
         minSamplePoints: 100,
@@ -66,16 +66,19 @@ function getOverallParameters() {
         minSourceMatches: 50,
         // If many source points find only a few unique target points as neighbors, the transformation will be inaccurate.
         // This parameter specifies a minimum number of unique target point neighbors.
-        minTargetMatches: 20,
+        minTargetMatches: 1,
         convergenceFitness: 0,
         convergenceRMSE: 0,
         numIterations: 0,
         maxNeighborDistance: 0,
-        ifcSampleCount: 0,
+        schematicSampleCount: 0,
+        pointcloudSampleCount: 0,
         // This number must be at least 1. The scale can only be multiplied or divided by this much at each depth of iterations.
         // maxScalePerIteration: 1.1,
         // This number must be at least 1. The scale can only be multiplied or divided by this much overall.
-        maxScaleChange: 1.1
+        maxScaleChange: 100,
+        // Seed for distributed point sampling from the schematic.
+        schematicFirstSeed: 2000
     };
 }
 
@@ -86,84 +89,97 @@ function updateDepthParameters(depth,pointcloud,targetModel,parameters) {
     parameters.convergenceRMSE = 0.01;
     // If no convergence is reached, increase the depth after this many iterations.
     parameters.numIterations = 2*2**(parameters.maxDepth-depth+1);
-    // The algorithm assumes the user roughly aligned the pointcloud on the IFC model. After this alignment, points in the source pointcloud that are
-    // farther than this distance from any points in the target IFC model are considered irrelevant (this distance is measured before ICP's transformations)
+    // The algorithm assumes the user roughly aligned the pointcloud on the schematic. After this alignment, points in the source pointcloud that are
+    // farther than this distance from any points in the target scehmatic are considered irrelevant (this distance is measured before ICP's transformations)
     parameters.maxSampleDistance = 0.05 * Math.max(...(["x","y","z"].map(dim=>targetModel.geometry.boundingBox.max[dim] - targetModel.geometry.boundingBox.min[dim])));
     // The max range to search for neighbors (this distance is measured after ICP's transformations)
-    parameters.maxNeighborDistance = 0.05/2**depth * Math.max(...(["x","y","z"].map(dim=>targetModel.geometry.boundingBox.max[dim] - targetModel.geometry.boundingBox.min[dim])));//3*pointcloud.pcoGeometry.spacing/2**depth;
-    // How many points to sample from the IFC mesh.
-    parameters.ifcSampleCount = 10000*1.1**depth;
+    parameters.maxNeighborDistance = Infinity//0.05/2**depth * Math.max(...(["x","y","z"].map(dim=>targetModel.geometry.boundingBox.max[dim] - targetModel.geometry.boundingBox.min[dim])));//3*pointcloud.pcoGeometry.spacing/2**depth;
+    // How many schematic points should be used at this depth.
+    parameters.schematicSampleCount = 5000*1.1**depth;
+    // How many pointcloud points should be used at this depth.
+    parameters.pointcloudSampleCount = 5000*1.1**depth;
 }
 
 // The main function. 
-export async function multiScaleICP(/*targetFilePath,*/ targetModel, sourcePointcloud, initialEstimate, clipVolume) {
+export async function multiScaleICP(/*targetFilePath,*/ targetModel, sourcePointcloud, clipVolume) {
     let overallTransformation = new Mlmatrix([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]);
 
     // Parameters for ICP.
     let parameters = getOverallParameters();
 
-    // List of the red points objects put on screen, tracked so they can be rotated along with the source pointcloud.
-    let renderedSourcePointsObjects = [];
+    // List of the blue points objects put on screen, which represent the pointcloud sampled points after transformation.
+    let afterPointsObjects = [];
 
-    let sourceNodes = [];
-    let sourceMatrix = new Mlmatrix([]);
+    let targetPoints = [];
+
+    let exhaustedPointsMatrix = new Mlmatrix(0,0);
+    let unexhaustedNodes = [await getRootNode(sourcePointcloud)];
     for(let depth = 0; depth <= parameters.maxDepth; depth++) {
         updateDepthParameters(depth,sourcePointcloud,targetModel,parameters);
 
-        console.log("Obtaining points from the IFC model.");
+        console.log("Obtaining points from the schematic mesh.");
         // Obtain target points and put them in a kdTree.
-        let targetPoints = getDistributedPlanePoints(targetModel,parameters.ifcSampleCount);
+        let newTargetPoints = getDistributedSurfacePoints(parameters.schematicSampleCount - targetPoints.length,targetModel,parameters.schematicFirstSeed + targetPoints.length);
+        targetPoints = targetPoints.concat(newTargetPoints);
         let targetKdTree = new KDTree(targetPoints);
         // Render points.
-        renderPoints(targetPoints, "green");
-        console.log(targetPoints.length + " IFC points");
+        renderPoints(newTargetPoints, "green");
+        console.log(targetPoints.length + " schematic points");
 
         console.log("Obtaining points from the pointcloud.");
         // Obtain the next depth of points from the pointcloud and add them to the transformable matrix.
         precomputedValues = clipVolumePrecomputedValues(clipVolume,sourcePointcloud)
         // precomputedValues = {squaredMaxDistance: parameters.maxSampleDistance ** 2, targetKdTree:targetKdTree};
-        console.log("Getting nodes.");
-        sourceNodes = await getNextDepthOfNodes(depth, sourceNodes, sourcePointcloud, clipVolumeNodeFilterMethod, precomputedValues);
-        console.log("Getting points.");
-        let newSourceMatrix = await getPointsMatrixFromNodes(sourceNodes, sourcePointcloud, clipVolumePointFilterMethod, precomputedValues);
-        sourceMatrix = mlmatrixConcat(sourceMatrix,newSourceMatrix);
+        let newSourcePointsMatrix;
+        [newSourcePointsMatrix, exhaustedPointsMatrix, unexhaustedNodes] = await getNPointsMatrix(parameters.pointcloudSampleCount, exhaustedPointsMatrix, unexhaustedNodes, 
+            sourcePointcloud, clipVolumeNodeFilterMethod, precomputedValues, clipVolumePointFilterMethod, precomputedValues);
+        let sourceMatrix = mlmatrixConcat(exhaustedPointsMatrix, newSourcePointsMatrix)
         // Render points.
-        let renderPointsArray = [];
-        for(let i = 0; i < newSourceMatrix.columns; i++)
-            renderPointsArray.push(new Vector3(newSourceMatrix.data[0][i],newSourceMatrix.data[1][i],newSourceMatrix.data[2][i]));
-        renderedSourcePointsObjects.push(renderPoints(renderPointsArray, "red"));
+        let beforePointsMatrix = inverse(overallTransformation).mmul(newSourcePointsMatrix);
+        let beforePointsArray = [];
+        for(let i = 0; i < beforePointsMatrix.columns; i++)
+            beforePointsArray.push(new Vector3(beforePointsMatrix.data[0][i],beforePointsMatrix.data[1][i],beforePointsMatrix.data[2][i]));
+        renderPoints(beforePointsArray, "red")
+        let afterPointsArray = [];
+        for(let i = 0; i < newSourcePointsMatrix.columns; i++)
+            afterPointsArray.push(new Vector3(newSourcePointsMatrix.data[0][i],newSourcePointsMatrix.data[1][i],newSourcePointsMatrix.data[2][i]));
+        afterPointsObjects.push(renderPoints(afterPointsArray, "blue"));
         console.log(sourceMatrix.columns + " pointcloud points.");
+
         // Skip the ICP iterations if there aren't enough points yet.
+        if(depth < parameters.minDepth) {
+            console.log("Not reached minDepth yet: proceeding to next depth.")
+            continue;
+        }
         if(sourceMatrix.columns < parameters.minSourcePoints) {
-            console.log("Not enough pointcloud points. Skipping to the next depth.");
+            console.log("Not enough pointcloud points: proceeding to next depth.");
             continue;
         }
 
         // This is currently unused.
         let weights = new Array(sourceMatrix.columns).fill(1);
 
-        if(depth >= parameters.minDepth) {
-            let scale = 1;
-            // Perform one depth of ICP iterations, which transforms sourceMatrix.
-            let result = singleICPDepth(sourceMatrix,targetKdTree,weights,parameters,scale);
-            scale = result.scale;
-            if(isNaN(scale) || scale === Infinity || scale === -Infinity || scale === 0) {
-                console.log("Scale became extreme. Aborting with no useful results.");
-                return new Matrix4();
-            }
-
-            // Update the overall transformation that has been applied to the sourceMatrix.
-            overallTransformation = result.transformation.mmul(overallTransformation);
-            // Apply the latest transformation to the pointcloud, and to the rendered source points.
-            let transMatrix = mlmatrixToMatrix4(result.transformation);
-            sourcePointcloud.applyMatrix4(transMatrix);
-            renderedSourcePointsObjects.forEach(renderedPointsObject => renderedPointsObject.applyMatrix4(transMatrix));
-
-            console.log(result.transformation);
+        let scale = 1;
+        // Perform one depth of ICP iterations.
+        let result = singleICPDepth(sourceMatrix,targetKdTree,weights,parameters,scale);
+        scale = result.scale;
+        if(isNaN(scale) || scale === Infinity || scale === -Infinity || scale === 0) {
+            console.log("Scale became extreme. Aborting with no useful results.");
+            return new Matrix4();
         }
+
+        // Apply result transformation.
+        let resultMatrix4 = mlmatrixToMatrix4(result.transformation);
+        overallTransformation = result.transformation.mmul(overallTransformation);
+        exhaustedPointsMatrix = result.transformation.mmul(exhaustedPointsMatrix);
+        sourcePointcloud.applyMatrix4(resultMatrix4);
+        afterPointsObjects.forEach(afterPointsObject => afterPointsObject.applyMatrix4(resultMatrix4));
+
+        console.log("Single depth transformation", result.transformation);
     }
-    // Print the overall transformation obtained by the ICP.
-    console.log(overallTransformation);
+
+    console.log("Overall transformation", overallTransformation);
+    return overallTransformation;
 }
 
 function singleICPDepth(sourceMatrix,targetKdTree,weights,parameters,scale) {
@@ -360,6 +376,8 @@ export function testGetBestTransformation() {
 
     let result = getBestTransformation(neighborPairs,weights);
 
+    // getBestTransformation[0] should be multiplied with the first half of the neighborPairs array that was fed to it.
+    // It will move the points to be very close to the second half.
     let answer = result[0].mmul(array2DToMlmatrix(transposeArray2D(source))).transpose().to2DArray();
     let correctAnswer = [
         [ 29.08878779, 152.36814188, 0],
@@ -405,14 +423,11 @@ export function testGetBestTransformation() {
     console.log("Scale", scaleCorrect ? "Correct":"Incorrect; expected: " + correctScale + " actual: " + scale )
 }
 
-function renderPoints(points, color, transformation) {
+function renderPoints(points, color) {
     let pointsObject = new Points(
         new BufferGeometry().setFromPoints(points), 
         new PointsMaterial({color:color, size: 1, sizeAttenuation: false})
     );
-
-    if(transformation)
-        pointsObject.applyMatrix4(mlmatrixToMatrix4(transformation));
 
     viewer.scene.scene.add(pointsObject);
     return pointsObject;

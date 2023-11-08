@@ -1,4 +1,4 @@
-import { LinearMipMapLinearFilter, Matrix4 } from "../libs/three.js/build/three.module";
+import { Matrix4 } from "../libs/three.js/build/three.module";
 import { Matrix as Mlmatrix } from "ml-matrix";
 
 export function mlmatrixToMatrix4(mlmatrix) {
@@ -38,17 +38,15 @@ export function transposeArray2D(array2D) {
 
 // Copies instead of modifying. 
 // A's columns are on the left, B's columns are on the right.
-// If one array has more rows, use the higher amount of rows.
+// If one array has more rows, fill all-zero rows in the smaller one to match.
 export function mlmatrixConcat(mlmatrixA, mlmatrixB) {
-    let rowsA = mlmatrixA.rows;
-    let rowsB = mlmatrixB.rows;
-    let newData = new Array(Math.max(rowsA,rowsB));
+    let newData = new Array(Math.max(mlmatrixA.rows,mlmatrixB.rows));
     for(let r = 0; r < newData.length; r++) {
-        newData[r] = [];
-        if(r < rowsA)
-            newData[r].push(...(mlmatrixA.data[r]));
-        if(r < rowsB)
-            newData[r].push(...(mlmatrixB.data[r]));
+        newData[r] = new ((r < mlmatrixA.rows) ? mlmatrixA : mlmatrixB).data[r].constructor(mlmatrixA.columns + mlmatrixB.columns);
+        if(r < mlmatrixA.rows)
+            newData[r].set(mlmatrixA.data[r]);
+        if(r < mlmatrixB.rows)
+            newData[r].set(mlmatrixB.data[r], mlmatrixA.columns);
     }
     return new Mlmatrix(newData);
 }
@@ -98,23 +96,21 @@ async function mergeSortHelper(list, comparison, start, afterEnd) {
 
 
 // https://rcoh.me/posts/linear-time-median-finding/
-// Returns the index of the median of the list. 
+// Returns the median of the array. 
 // Errors if list is empty.
-export function medianFind(list,comparison) {
-    return sortedIndexFind(list, Math.floor(list.length/2-0.5), comparison);
+export function medianFind(array,comparison) {
+    return sortedIndexFind(array, Math.floor(array.length/2-0.5), comparison);
 }
 
 // https://rcoh.me/posts/linear-time-median-finding/
-// Returns the index of the item which, if the list were sorted, would be located at the given index.
-// Errors if list is empty.
-function sortedIndexFind(list,index,comparison) {
-    if(list.length == 1)
-        return index;
-    let pivotIndex = Math.floor(Math.random() * list.length);
+// Returns the item which, if the array were sorted, would be located at the given index.
+// Errors if array is empty.
+function sortedIndexFind(array,index,comparison) {
+    let pivotIndex = Math.floor(Math.random() * array.length);
     let left = [];
     let right = [];
-    list.forEach(item => {
-        let compValue = comparison(item,list[pivotIndex])
+    array.forEach(item => {
+        let compValue = comparison(item,array[pivotIndex])
         if(compValue < 0)
             left.push(item)
         if(compValue > 0)
@@ -122,8 +118,83 @@ function sortedIndexFind(list,index,comparison) {
     })
     if(index < left.length)
         return sortedIndexFind(left,index,comparison);
-    let rightStart = list.length - right.length;
+    let rightStart = array.length - right.length;
     if(index >= rightStart)
-        return rightStart + sortedIndexFind(right,index-rightStart,comparison);
-    return pivotIndex;
+        return sortedIndexFind(right,index-rightStart,comparison);
+    return array[pivotIndex];
+}
+
+// Returns an array of n integers in the range 0(inclusive) to len(exclusive) with no repeats.
+// len<0 is treated as len=0. n<0 is treated as n=0. n>len is treated as n=len.
+export function arrayRandomSubset(n,len) {
+    // Sampling 0 items or from nothing returns nothing.
+    if(n <= 0 || len <= 0)
+        return [];
+
+    // Make array of 0(inclusive) to len(exclusive).
+    let array = Array(len);
+    let i = 0;
+    while(i < len)
+        array[i] = i++;
+
+    // Sampling everything returns everything.
+    if(n >= len)
+        return array;
+
+    // Partial Fisher Yates shuffle with the last n items in the list.
+    for(i = 1; i <= n; i++) {
+        // idx is the ith-last index in the array.
+        let idx = len-i;
+        // Pick 0 <= j <= idx randomly.
+        let j = Math.floor(Math.random()*(idx+1));
+        // Swap j and idx.
+        let temp = array[idx];
+        array[idx] = array[j];
+        array[j] = temp;
+    }
+    // Return the last n items.
+    return array.slice(len-n);
+}
+
+// Round an array of values up or down, such that their sum changes as little as possible,
+// and a number like 1.6 does not round down if a number like 2.4 rounds up.
+// The decimal parts of numbers that round up must be >= than those of those that round down.
+export function sumPreservingRound(array) {
+    // Find how many numbers need to be ceiled, by comparing the floor-all sum to the target sum.
+    let sum = 0;
+    let floorSum = 0;
+    for(let i = 0; i < array.length; i++) {
+        sum += array[i];
+        floorSum += Math.floor(array[i]);
+    }
+    sum = Math.round(sum);
+    let ceils = sum - floorSum;
+
+    // Find the cutoff point for floor vs ceil.
+    let lowestCeil;
+    if(ceils == 0)
+        lowestCeil = 1.0;
+    else
+        lowestCeil = sortedIndexFind(array, array.length - ceils, (a,b) => a%1 - b%1) % 1;
+
+    // Ceil numbers above the cutoff, floor numbers on or below the cutoff.
+    let roundedArray = new Array(array.length);
+    for(let i = 0; i < array.length; i++) {
+        if(array[i] % 1 > lowestCeil) {
+            roundedArray[i] = Math.ceil(array[i]);
+            ceils--;
+        }
+        else
+            roundedArray[i] = Math.floor(array[i]);
+    }
+
+    // For numbers on the cutoff, change some to ceil. as many as necessary to obtain the desired sum.
+    for(let i = 0; i < array.length && ceils > 0; i++) {
+        if(array[i] % 1 == lowestCeil) {
+            roundedArray[i] = Math.ceil(array[i]);
+            ceils--;
+        }
+    }
+
+    return roundedArray;
 }

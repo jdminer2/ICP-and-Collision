@@ -29,15 +29,15 @@ export class KDTree {
         }
 
         // center root point has the median value on this node's axis.
-        let medianIndex = medianFind(points, (a,b) => a[this.axis] - b[this.axis]);
-        this.point = points[medianIndex];
+        this.point = medianFind(points, (a,b) => a[this.axis] - b[this.axis]);
+        let pointIndex = points.findIndex(point => (point[this.axis] == this.point[this.axis]))
 
         // Sort points into the left or right list. 
         let leftArray = [];
         let rightArray = [];
         points.forEach((point,index) => {
-            // Don't put the median point in the subtrees, but do put other tied points in.
-            if(index != medianIndex) {
+            // Don't put the center root point in the subtrees, but do put other tied points in.
+            if(index != pointIndex) {
                 // Push the point into the side that it belongs in.
                 if(this.belongsLeft(point))
                     leftArray.push(point);

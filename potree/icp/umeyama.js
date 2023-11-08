@@ -126,7 +126,7 @@ export function getSimilarityTransformation(fromPoints,
     // The optimal bounded scale is the closest bounded value to the optimal unbouned scale.
     // Scale-bounding does not affect optimal rotation, as long as scale is positive (it should be if the weights are nonnegative). 
     // The optimal translation with scale-bounding can be obtained by plugging in the new scale to the same translation equation.
-    console.log(minScale, scale, maxScale);
+    console.log("Lower limit: " + minScale, "Preferred scale: " + scale, "Upper limit: " + maxScale);
     if(scale < minScale)
         scale = minScale;
     if(scale > maxScale)

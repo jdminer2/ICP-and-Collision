@@ -1,13 +1,15 @@
 import {IFCLoader} from "web-ifc-three/IFCLoader"
-import {AmbientLight, DirectionalLight, Matrix4, Object3D, Vector3, Box3, Euler, NormalBlending} from "three";
+import {AmbientLight, DirectionalLight, Matrix4, Object3D, Vector3, Euler} from "three";
 import { multiScaleICP, testGetBestTransformation } from "./icp";
-import { VolumeTool } from "../src/utils/VolumeTool";
-import { BoxVolume } from "../src/utils/Volume";
-import { PointCloudOctree, PointCloudOctreeNode } from "../src/PointCloudOctree";
 import { waitForDef } from "./utils";
+import { OBJLoader } from "../libs/three.js/loaders/OBJLoader.js";
 
-let potreeFilePath = "./0611/metadata.json";;
-let ifcFilePath = "mccormick-0416-research.ifc";
+// Must point to the metadata.json file for the pointcloud, with related files nearby as described in the README.
+//let potreeFilePath = "./geometryFiles/0611File/0611/metadata.json";
+let potreeFilePath = "./geometryFiles/jointFile/joint/metadata.json"; 
+// Schematic must end in .ifc or .obj
+//let schematicFilePath = "./geometryFiles/0611File/mccormick-0416-research.ifc";
+let schematicFilePath = "./geometryFiles/jointFile/joint_model.obj";
 
 // Generate the transformation matrix corresponding to applying xRot about the x axis, then yRot about the newly shifted y axis,
 // then zRot about the newly shifted z axis, then scale, then xMove, yMove, zMove in the original coordinate space.
@@ -47,14 +49,14 @@ function randomTransformationMatrix(maxXRot,maxYRot,maxZRot,maxScaleFactor,maxXM
 
 let initialGuess;
 initialGuess = generateTransformationMatrix(0,0,0,1,0,0,0);
-initialGuess = randomTransformationMatrix(0.1,0.1,0.1,1.1,10,10,10);
-initialGuess = generateTransformationMatrix(-0.096187,0.074300,-0.024604,1.034383,-0.498889,-8.420134,-9.227480)
+//initialGuess = randomTransformationMatrix(0.1,0.1,0.1,1.1,10,10,10);
+//initialGuess = generateTransformationMatrix(-0.096187,0.074300,-0.024604,1.034383,-0.498889,-8.420134,-9.227480)
 
 async function initialize() {
     loadViewer();
     testGetBestTransformation();
     [viewer.schematic, viewer.pointcloud] = await Promise.all([
-        loadIFC(ifcFilePath),
+        loadSchematic(schematicFilePath),
         loadPotree(potreeFilePath)
     ]);
     console.log(viewer.schematic);
@@ -64,8 +66,8 @@ async function initialize() {
     window.removeEventListener("load",initialize);
     viewer.pointcloud.applyMatrix4(initialGuess);
     $('#runICPButton').on("click", (e)=>{
-        multiScaleICP(viewer.schematic,viewer.pointcloud,generateTransformationMatrix(0,0,0,1,0,0,0),viewer.clipVolume).then(transformationMatrix=>
-            {}//applyICPResult(viewer.pointcloud,transformationMatrix)
+        multiScaleICP(viewer.schematic,viewer.pointcloud,viewer.clipVolume).then(transformationMatrix=>
+            {}
         );
     });    
 }
@@ -179,44 +181,47 @@ async function loadPotree(filePath) {
     });
 }
 
-async function loadIFC(filePath) {
-    let ifcLoader = new IFCLoader();
+async function loadSchematic(filePath) {
+    // Check if it's IFC or OBJ file.
+    let filePathExtension = filePath.split('.').pop();
+    if(!filePathExtension)
+        throw new Error("Unsupported: schematic file extension missing. Only supports .ifc and .obj currently.");
+    if(!["ifc","obj"].includes(filePathExtension.toLowerCase()))
+        throw new Error("Unsupported schematic file extension: " + filePathExtension + ". Only supports .ifc and .obj currently.");
+    let isIFC = "ifc" === filePathExtension.toLowerCase();
+
+    let loader = isIFC ? new IFCLoader() : new OBJLoader();
     let schematic;
-    ifcLoader.load(filePath, (ifcModel) => {     
-        // Some adjustments: name and transparency.   
-        ifcModel.name = "Schematic";
-        ifcModel.material.forEach(material=>
-            material.transparent = true
-        )
+    loader.load(filePath, model => {
+        schematic = isIFC ? model : model.children[0];
+        schematic.name = "Schematic";
+        schematic.isIFC = isIFC;
+
+        // Material transparency enabled for the sidebar slider.
+        if(Array.isArray(schematic.material))
+            schematic.material.forEach(material=>
+                material.transparent = true
+            )
+        else
+            schematic.material.transparent = true;
         
         // Insert into the scene. 
-        let ifcjsContainer = new Object3D();
-        ifcjsContainer.rotation.x = Math.PI/2; // Because of the difference between IFCJS and Potree viewers.
-        ifcjsContainer.add(ifcModel);
-        viewer.scene.scene.add(ifcjsContainer);
+        let schematicContainer = new Object3D();
+        // Because Potree seems to be rotated Math.PI compared to other things.
+        schematicContainer.rotation.x = Math.PI/2;
+        schematicContainer.add(schematic);
 
-        // Lighting
+        // Add lighting
         const ambientLight = new AmbientLight(0xffffff, 0.5);
         const directionalLight = new DirectionalLight(0xffffff, 1);
         directionalLight.position.set(0, 10, 0);
         directionalLight.target.position.set(-5, 0, 0);
-        ifcjsContainer.add(ambientLight);
-        ifcjsContainer.add(directionalLight);
-        ifcjsContainer.add(directionalLight.target);
+        schematicContainer.add(ambientLight);
+        schematicContainer.add(directionalLight);
+        schematicContainer.add(directionalLight.target);
 
-        schematic = ifcModel;
+        viewer.scene.scene.add(schematicContainer);
     });
     await waitForDef(()=>schematic?.geometry?.boundingSphere);
     return schematic;
-}
-
-function applyICPResult(pointcloud,transformationMatrix) {
-    let flattenedTransMatrix = transformationMatrix.data.flatMap(row=>[...row])
-    if(Number.isNaN(flattenedTransMatrix[0])) {
-        console.log("Failure.");
-        return;
-    }
-    let THREETransMatrix = new Matrix4().set(...flattenedTransMatrix)
-    pointcloud.applyMatrix4(THREETransMatrix)
-    console.log("Reached");
 }
