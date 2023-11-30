@@ -1273,18 +1273,25 @@ export class Sidebar{
 
 	initICPSettings(){
 		$('#schemPosXInput').val(this.viewer.getSchemParam("position","x"));
+		$('#schemPosXInput').off("input");
 		$('#schemPosXInput').on("input", (e)=>this.viewer.setSchemParam("position","x", e.target.value));
 		$('#schemPosYInput').val(this.viewer.getSchemParam("position","y"));
+		$('#schemPosYInput').off("input");
 		$('#schemPosYInput').on("input", (e)=>this.viewer.setSchemParam("position","y", e.target.value));
 		$('#schemPosZInput').val(this.viewer.getSchemParam("position","z"));
+		$('#schemPosZInput').off("input");
 		$('#schemPosZInput').on("input", (e)=>this.viewer.setSchemParam("position","z", e.target.value));
 		$('#schemRotXInput').val(this.viewer.getSchemParam("rotation","x"));
+		$('#schemRotXInput').off("input");
 		$('#schemRotXInput').on("input", (e)=>this.viewer.setSchemParam("rotation","x", e.target.value));
 		$('#schemRotYInput').val(this.viewer.getSchemParam("rotation","y"));
+		$('#schemRotYInput').off("input");
 		$('#schemRotYInput').on("input", (e)=>this.viewer.setSchemParam("rotation","y", e.target.value));
 		$('#schemRotZInput').val(this.viewer.getSchemParam("rotation","z"));
+		$('#schemRotZInput').off("input");
 		$('#schemRotZInput').on("input", (e)=>this.viewer.setSchemParam("rotation","z", e.target.value));
 		$('#schemScaleInput').val(this.viewer.getSchemParam("scale","x"));
+		$('#schemScaleInput').off("input");
 		$('#schemScaleInput').on("input", (e)=>this.viewer.setSchemParam("scale","all", e.target.value));
 
 		this.viewer.addEventListener('schematic_param_changed', (event) => {
@@ -1298,18 +1305,25 @@ export class Sidebar{
 		});
 
 		$('#pclPosXInput').val(this.viewer.getPclParam("position","x"));
+		$('#pclPosXInput').off("input");
 		$('#pclPosXInput').on("input", (e)=>this.viewer.setPclParam("position","x", e.target.value));
 		$('#pclPosYInput').val(this.viewer.getPclParam("position","y"));
+		$('#pclPosYInput').off("input");
 		$('#pclPosYInput').on("input", (e)=>this.viewer.setPclParam("position","y", e.target.value));
 		$('#pclPosZInput').val(this.viewer.getPclParam("position","z"));
+		$('#pclPosZInput').off("input");
 		$('#pclPosZInput').on("input", (e)=>this.viewer.setPclParam("position","z", e.target.value));
 		$('#pclRotXInput').val(this.viewer.getPclParam("rotation","x"));
+		$('#pclRotXInput').off("input");
 		$('#pclRotXInput').on("input", (e)=>this.viewer.setPclParam("rotation","x", e.target.value));
 		$('#pclRotYInput').val(this.viewer.getPclParam("rotation","y"));
+		$('#pclRotYInput').off("input");
 		$('#pclRotYInput').on("input", (e)=>this.viewer.setPclParam("rotation","y", e.target.value));
 		$('#pclRotZInput').val(this.viewer.getPclParam("rotation","z"));
+		$('#pclRotZInput').off("input");
 		$('#pclRotZInput').on("input", (e)=>this.viewer.setPclParam("rotation","z", e.target.value));
 		$('#pclScaleInput').val(this.viewer.getPclParam("scale","x"));
+		$('#pclScaleInput').off("input");
 		$('#pclScaleInput').on("input", (e)=>this.viewer.setPclParam("scale","all", e.target.value));
 
 		this.viewer.addEventListener('pointcloud_param_changed', (event) => {
@@ -1323,22 +1337,31 @@ export class Sidebar{
 		});
 
 		$('#pclCropPosXInput').val(this.viewer.getPclCropParam("position","x"));
+		$('#pclCropPosXInput').off("input");
 		$('#pclCropPosXInput').on("input", (e)=>this.viewer.setPclCropParam("position","x", e.target.value));
 		$('#pclCropPosYInput').val(this.viewer.getPclCropParam("position","y"));
+		$('#pclCropPosYInput').off("input");
 		$('#pclCropPosYInput').on("input", (e)=>this.viewer.setPclCropParam("position","y", e.target.value));
 		$('#pclCropPosZInput').val(this.viewer.getPclCropParam("position","z"));
+		$('#pclCropPosZInput').off("input");
 		$('#pclCropPosZInput').on("input", (e)=>this.viewer.setPclCropParam("position","z", e.target.value));
 		$('#pclCropRotXInput').val(this.viewer.getPclCropParam("rotation","x"));
+		$('#pclCropRotXInput').off("input");
 		$('#pclCropRotXInput').on("input", (e)=>this.viewer.setPclCropParam("rotation","x", e.target.value));
 		$('#pclCropRotYInput').val(this.viewer.getPclCropParam("rotation","y"));
+		$('#pclCropRotYInput').off("input");
 		$('#pclCropRotYInput').on("input", (e)=>this.viewer.setPclCropParam("rotation","y", e.target.value));
 		$('#pclCropRotZInput').val(this.viewer.getPclCropParam("rotation","z"));
+		$('#pclCropRotZInput').off("input");
 		$('#pclCropRotZInput').on("input", (e)=>this.viewer.setPclCropParam("rotation","z", e.target.value));
 		$('#pclCropScaleXInput').val(this.viewer.getPclCropParam("scale","x"));
+		$('#pclCropScaleXInput').off("input");
 		$('#pclCropScaleXInput').on("input", (e)=>this.viewer.setPclCropParam("scale","x", e.target.value));
 		$('#pclCropScaleYInput').val(this.viewer.getPclCropParam("scale","y"));
+		$('#pclCropScaleYInput').off("input");
 		$('#pclCropScaleYInput').on("input", (e)=>this.viewer.setPclCropParam("scale","y", e.target.value));
 		$('#pclCropScaleZInput').val(this.viewer.getPclCropParam("scale","z"));
+		$('#pclCropScaleZInput').off("input");
 		$('#pclCropScaleZInput').on("input", (e)=>this.viewer.setPclCropParam("scale","z", e.target.value));
 
 		this.viewer.addEventListener('pointcloud_crop_param_changed', (event) => {

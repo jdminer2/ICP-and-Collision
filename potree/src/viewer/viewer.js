@@ -697,10 +697,11 @@ export class Viewer extends EventDispatcher{
 	}
 
 	setSchemParam (param, dimension, value) {
+		// Disregard nonnumeric inputs
 		if(Number(value) !== parseFloat(value))
 			return;
 
-		// Variable params
+		// Disregard unchanged inputs, and track latest changes.
 		if(dimension === "all") {
 			if(this.schemParams[param].x === value 
 				&& this.schemParams[param].y === value 
@@ -715,31 +716,60 @@ export class Viewer extends EventDispatcher{
 			this.schemParams[param][dimension] = value;
 		}
 
-		// Schematic bounding volume
-		this.inputHandler.scene.volumes.forEach(volume => {
-			if(volume.name === "Schem Bounding Box") {
-				if(dimension === "all")
-					volume[param].set(Number(value), Number(value), Number(value));
-				else
-					volume[param][dimension] = Number(value);
-			}
-		});
+		// Full recalculation of position, rotation, and scale for object and volume.
+		let position = new Vector3(Number(this.schemParams.position.x),
+								   Number(this.schemParams.position.y),
+								   Number(this.schemParams.position.z));
+		let rotation = new Euler(Number(this.schemParams.rotation.x),
+								 Number(this.schemParams.rotation.y),
+								 Number(this.schemParams.rotation.z),
+								 this.schematic.rotation.order);
+		let scale = new Vector3(Number(this.schemParams.scale.x),
+								Number(this.schemParams.scale.y),
+								Number(this.schemParams.scale.z));
 
-		// Schematic
-		if(dimension === "all")
-			this.schematic[param].set(Number(value), Number(value), Number(value));
-		else
-			this.schematic[param][dimension] = Number(value);
+		let objectScale = scale.clone().multiply(this.schemVolume.objectScaleFactor);
+		let volumeScale = scale.clone().multiply(this.schemVolume.volumeScaleFactor);
+
+		let objectRotation = rotation.clone();
+		objectRotation.order = "XZY";
+
+		let adjustedPositionOffset = this.schemVolume.positionOffset.clone().applyEuler(objectRotation).multiply(objectScale);
+
+		objectRotation.order = "XYZ";
+		let temp = objectRotation.y;
+		objectRotation.y = objectRotation.z;
+		objectRotation.z = -temp;
+
+		let objectPosition = position.clone().sub(adjustedPositionOffset);
+		temp = objectPosition.y;
+		objectPosition.y = objectPosition.z;
+		objectPosition.z = -temp;
+
+
+		// objectRotation.x += Math.PI/2;
+		
+
+		console.log("changed2")
+		
+
+		this.schematic.position.copy(objectPosition);
+		this.schematic.rotation.copy(objectRotation);
+		this.schematic.scale.copy(objectScale);
+		this.schemVolume.position.copy(position);
+		this.schemVolume.rotation.copy(rotation);
+		this.schemVolume.scale.copy(volumeScale);
 		
 		this.dispatchEvent({'type': 'schematic_param_changed', 'viewer': this});
 	}
 
 	// uses this.pclOffset, which is created in app.js
 	setPclParam (param, dimension, value) {
+		// Disregard nonnumeric inputs
 		if(Number(value) !== parseFloat(value))
 			return;
 
-		// Variable params
+		// Disregard unchanged inputs, and track latest changes.
 		if(dimension === "all") {
 			if(this.pclParams[param].x === value 
 				&& this.pclParams[param].y === value 
@@ -754,69 +784,46 @@ export class Viewer extends EventDispatcher{
 			this.pclParams[param][dimension] = value;
 		}
 
-		// Turn textbox inputs into number form for later.
-		let textboxVector = new THREE.Vector3(Number(this.pclParams[param].x), Number(this.pclParams[param].y), Number(this.pclParams[param].z));
+		// Full recalculation of position, rotation, and scale for object and volume.
+		let position = new Vector3(Number(this.pclParams.position.x),
+								   Number(this.pclParams.position.y),
+								   Number(this.pclParams.position.z));
+		let rotation = new Euler(Number(this.pclParams.rotation.x),
+								 Number(this.pclParams.rotation.y),
+								 Number(this.pclParams.rotation.z),
+								 this.pointcloud.rotation.order);
+		let scale = new Vector3(Number(this.pclParams.scale.x),
+								Number(this.pclParams.scale.y),
+								Number(this.pclParams.scale.z));
 
-		// Pointcloud bounding volume
-		let boundingBoxPosition;
-		this.inputHandler.scene.volumes.forEach(volume => {
-			if(volume.name === "Pcl Bounding Box") {
-				if(param === "position")
-					volume.position.addVectors(textboxVector,this.pclOffset.userTextboxDiscrepancy)
-				else if(param === "rotation")
-					volume.rotation.setFromVector3(textboxVector);
-				else
-					volume.scale.multiplyVectors(textboxVector,this.pclOffset.scaleFactor);
+		let objectScale = scale.clone().multiply(this.pclVolume.objectScaleFactor);
+		let volumeScale = scale.clone().multiply(this.pclVolume.volumeScaleFactor);
 
-				boundingBoxPosition = volume.position;
-			}
-		});
+		let adjustedPositionOffset = this.pclVolume.positionOffset.clone().applyEuler(rotation).multiply(objectScale);
+		let objectPosition = position.clone().sub(adjustedPositionOffset);
 
-		// Pointcloud
-		if(param === "rotation")
-			this.pointcloud.rotation.setFromVector3(textboxVector);
-		else if(param === "scale")
-			this.pointcloud.scale.copy(textboxVector);
-		// Recalculate pointcloud position regardless of which textbox changed.
-		this.pointcloud.position.copy(
-			boundingBoxPosition.clone().add(
-				this.pclOffset.pointcloudDiscrepancy.clone()
-					.applyEuler(this.pointcloud.rotation)
-					.multiply(this.pointcloud.scale)
-			)
-		);
+		this.pointcloud.position.copy(objectPosition);
+		this.pointcloud.rotation.copy(rotation);
+		this.pointcloud.scale.copy(objectScale);
+		this.pclVolume.position.copy(position);
+		this.pclVolume.rotation.copy(rotation);
+		this.pclVolume.scale.copy(volumeScale);
 		
 		this.dispatchEvent({'type': 'pointcloud_param_changed', 'viewer': this});
 	}
 
 	setPclCropParam (param, dimension, value) {
+		// Disregard nonnumeric inputs
 		if(Number(value) !== parseFloat(value))
 			return;
 
-		// Variable params
-		if(dimension === "all") {
-			if(this.pclCropParams[param].x === value 
-				&& this.pclCropParams[param].y === value 
-				&& this.pclCropParams[param].z === value
-			)
-				return;
-			this.pclCropParams[param] = {x:value, y:value, z:value};
-		}
-		else {
-			if(this.pclCropParams[param][dimension] === value)
-				return;
-			this.pclCropParams[param][dimension] = value;
-		}
+		// Disregard unchanged inputs, and track latest changes.
+		if(this.pclCropParams[param][dimension] === value)
+			return;
+		this.pclCropParams[param][dimension] = value;
 
-		// Pointcloud cropping volume
-		this.inputHandler.scene.volumes.forEach(volume => {
-			if(volume.name === "Pcl Cropping Box") {
-				if(dimension === "all")
-					volume[param].set(Number(value), Number(value), Number(value));
-				else
-					volume[param][dimension] = Number(value);
-			}
-		});
+		// Update value.
+		this.clipVolume[param][dimension] = Number(value);
 		
 		this.dispatchEvent({'type': 'pointcloud_crop_param_changed', 'viewer': this});
 	}

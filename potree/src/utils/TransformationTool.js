@@ -458,11 +458,38 @@ export class TransformationTool {
 
 			let normal = new THREE.Vector3(...handle.alignment);
 			for (let selection of this.selection) {
+				let oldRotation = {...selection.rotation};
 				selection.rotateOnAxis(normal, angle);
+				let newRotation = {...selection.rotation};
 				selection.dispatchEvent({
 					type: "orientation_changed",
 					object: selection
 				});
+				let functionName = {"Schem Bounding Box":"setSchemParam","Pcl Bounding Box":"setPclParam","Pcl Cropping Box":"setPclCropParam"}[selection.name];
+				let oldPosition = {...selection.position};
+				// Change position.
+				if(selection.name === "Schem Bounding Box") {
+					let diff = {};
+					for(let dim of ["_x", "_y", "_z"])
+						diff[dim] = newRotation[dim] - oldRotation[dim];
+
+					console.log(oldRotation);
+					console.log(newRotation);
+					console.log(diff);
+
+					this.viewer[functionName]("rotation","x",newRotation._x-Math.PI/2);
+					this.viewer[functionName]("rotation","y",oldRotation._y + diff._z);
+					this.viewer[functionName]("rotation","z",oldRotation._z - diff._y);
+				}
+				else {
+					this.viewer[functionName]("rotation","x",newRotation._x);
+					this.viewer[functionName]("rotation","y",newRotation._y);
+					this.viewer[functionName]("rotation","z",newRotation._z);
+				}
+				// Change position so that the box doesn't appear to move from its offsets.
+				this.viewer[functionName]("position","x",oldPosition.x);
+				this.viewer[functionName]("position","y",oldPosition.y);
+				this.viewer[functionName]("position","z",oldPosition.z);
 			}
 
 			drag.pivot = I;
@@ -517,6 +544,12 @@ export class TransformationTool {
 						type: "position_changed",
 						object: selection
 					});
+					let functionName = {"Schem Bounding Box":"setSchemParam","Pcl Bounding Box":"setPclParam","Pcl Cropping Box":"setPclCropParam"}[selection.name];
+					let newPosition = {...selection.position};
+					// Change position.
+					this.viewer[functionName]("position","x",newPosition.x);
+					this.viewer[functionName]("position","y",newPosition.y);
+					this.viewer[functionName]("position","z",newPosition.z);
 				}
 
 				drag.pivot = drag.pivot.add(diff);
@@ -588,6 +621,14 @@ export class TransformationTool {
 				let diffPosition = diff.clone().multiplyScalar(0.5);
 
 				for (let selection of this.selection) {
+					// If the volume is flat in this dimension, do not allow it to be enlarged. 
+					// Scale handles never make it truly flat.
+					let scaleHandleDimension = handle.alignment[0]?"x":handle.alignment[1]?"y":"z";
+					if(selection.name === "Schem Bounding Box" && this.viewer.schemVolume.volumeScaleFactor[scaleHandleDimension] == 0)
+						continue;
+					if(selection.name === "Pcl Bounding Box" && this.viewer.pclVolume.volumeScaleFactor[scaleHandleDimension] == 0)
+						continue;
+					// Make changes to selection, and dispatch events.
 					selection.scale.add(diffScale);
 					selection.scale.x = Math.max(0.1, selection.scale.x);
 					selection.scale.y = Math.max(0.1, selection.scale.y);
@@ -601,6 +642,25 @@ export class TransformationTool {
 						type: "scale_changed",
 						object: selection
 					});
+					let functionName = {"Schem Bounding Box":"setSchemParam","Pcl Bounding Box":"setPclParam","Pcl Cropping Box":"setPclCropParam"}[selection.name];
+					let oldPosition = {...selection.position};
+					// Change scale if Pcl Cropping Box
+					if(selection.name === "Pcl Cropping Box") {
+						this.viewer[functionName]("scale","x",selection.scale.x);
+						this.viewer[functionName]("scale","y",selection.scale.y);
+						this.viewer[functionName]("scale","z",selection.scale.z);
+					}
+					// Change scale if not Pcl Cropping Box
+					else {
+						let volumeName = {"Schem Bounding Box":"schemVolume","Pcl Bounding Box":"pclVolume"}[selection.name];
+						// Account for volumeScaleFactor.
+						let newScaleVal = selection.scale[scaleHandleDimension]/this.viewer[volumeName].volumeScaleFactor[scaleHandleDimension]
+						this.viewer[functionName]("scale","all",newScaleVal);
+					}
+					// Change position so that the opposite side of the box doesn't appear to move.
+					this.viewer[functionName]("position","x",oldPosition.x);
+					this.viewer[functionName]("position","y",oldPosition.y);
+					this.viewer[functionName]("position","z",oldPosition.z);
 				}
 
 				drag.pivot.copy(iOnLine);
