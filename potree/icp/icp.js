@@ -70,6 +70,7 @@ function getOverallParameters() {
         convergenceFitness: 0,
         convergenceRMSE: 0,
         numIterations: 0,
+        maxSampleDistance: 0,
         maxNeighborDistance: 0,
         schematicSampleCount: 0,
         pointcloudSampleCount: 0,
@@ -102,6 +103,9 @@ function updateDepthParameters(depth,pointcloud,targetModel,parameters) {
 
 // The main function. 
 export async function multiScaleICP(/*targetFilePath,*/ targetModel, sourcePointcloud, clipVolume) {
+    let filteringPrecomputedValues = clipVolumePrecomputedValues(clipVolume,sourcePointcloud);
+    // let filteringPrecomputedValues = {squaredMaxDistance: parameters.maxSampleDistance ** 2, targetKdTree: null, 
+    //   {matrix:sourcePointcloud.matrix.clone(), rotation:sourcePointcloud.rotation.clone(), scale:sourcePointcloud.scale.clone(), position:sourcePointcloud.position.clone()}}
     let overallTransformation = new Mlmatrix([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]);
 
     // Parameters for ICP.
@@ -127,12 +131,12 @@ export async function multiScaleICP(/*targetFilePath,*/ targetModel, sourcePoint
         console.log(targetPoints.length + " schematic points");
 
         console.log("Obtaining points from the pointcloud.");
+        // filteringPrecomputedValues.squaredMaxDistance = parameters.maxSampleDistance ** 2;
+        // filteringPrecomputedValues.targetKdTree = targetKdTree;
         // Obtain the next depth of points from the pointcloud and add them to the transformable matrix.
-        precomputedValues = clipVolumePrecomputedValues(clipVolume,sourcePointcloud)
-        // precomputedValues = {squaredMaxDistance: parameters.maxSampleDistance ** 2, targetKdTree:targetKdTree};
         let newSourcePointsMatrix;
         [newSourcePointsMatrix, exhaustedPointsMatrix, unexhaustedNodes] = await getNPointsMatrix(parameters.pointcloudSampleCount, exhaustedPointsMatrix, unexhaustedNodes, 
-            sourcePointcloud, clipVolumeNodeFilterMethod, precomputedValues, clipVolumePointFilterMethod, precomputedValues);
+            sourcePointcloud, clipVolumeNodeFilterMethod, clipVolumePointFilterMethod, filteringPrecomputedValues);
         let sourceMatrix = mlmatrixConcat(exhaustedPointsMatrix, newSourcePointsMatrix)
         // Render points.
         let beforePointsMatrix = inverse(overallTransformation).mmul(newSourcePointsMatrix);

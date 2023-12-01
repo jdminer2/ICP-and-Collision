@@ -1,60 +1,96 @@
 import { OctreeGeometryNode } from "../src/modules/loader/2.0/OctreeGeometry";
-import { BufferGeometry, BufferAttribute, Euler, Vector3, Matrix4 } from "../libs/three.js/build/three.module";
+import { BufferGeometry, BufferAttribute, Euler, Vector3, Matrix3, Matrix4 } from "../libs/three.js/build/three.module";
 import { Matrix as Mlmatrix } from 'ml-matrix';
 import { waitForDef, matrix4ToMlmatrix, mlmatrixConcat, arrayRandomSubset } from "./utils"
 
   // Precomputed values for the clipVolume point filtering strategy.
-  export function clipVolumePrecomputedValues(clipVolume,pointcloud) {
-    // Obtain the 6 normals, 3 from the clipVolume's faces and 3 from the pointcloud's nodes' faces.
+  // The transformation on sourcePointcloud when this method is called is the one that is used:
+  //   To check for points that were originally inside clipVolume before transformation, call this method before transformation.
+  //   To check for points that become inside clipVolume after some transformation, call this method after transformation.
+  export function clipVolumePrecomputedValues(clipVolume,sourcePointcloud) {
+    // According to the separating axis theorem, two convex polyhedra intersect if and only if the projections of the polyhedra overlap
+    // for all normals of each polyhedra's faces. https://dyn4j.org/2010/01/sat/
+    // A box has 3 normals: [1,0,0], [0,1,0], and [0,0,1], transformed by the box's rotation.
+    // So we have 6 normals to work with. These will always be the same, so we can precompute them.
     let normals = [
       new Vector3(1,0,0).applyEuler(clipVolume.rotation),
       new Vector3(0,1,0).applyEuler(clipVolume.rotation),
       new Vector3(0,0,1).applyEuler(clipVolume.rotation),
-      new Vector3(1,0,0).applyEuler(pointcloud.rotation),
-      new Vector3(0,1,0).applyEuler(pointcloud.rotation),
-      new Vector3(0,0,1).applyEuler(pointcloud.rotation)
+      new Vector3(1,0,0).applyEuler(sourcePointcloud.rotation),
+      new Vector3(0,1,0).applyEuler(sourcePointcloud.rotation),
+      new Vector3(0,0,1).applyEuler(sourcePointcloud.rotation)
     ];
 
-    // Project the clipVolume box onto each normal
+    // Projections of a point p onto a unit vector n = dotProduct(p,n)*n. It is all projecting onto the same direction, so we can ignore the *n.
+    // The projections of boxes overlap if: check each corner and find the range [min,max] of dotProduct(corner of box1,n). Do the same for box2, and check if ranges overlap.
+    // The projection of a box contains the projection of a point if: the above range contains dotProduct(point,n).
+
+    // clipVolume will always be the same, so we can precompute its projection range.
     let clipVolumeProjections = getBoxProjections(normals, clipVolume, clipVolume);
 
-    return {normals, clipVolumeProjections};
+    // node box will change depending on what nodes we explore. However, the transformation applied to it will always be the same.
+    // Therefore we can save some work.
+
+    // For a transformed vector: RSv+P
+    // dotProduct(RSv+P,n)=dotProduct(v,transpose(RS)n)+dotProduct(P,n)
+    // X will store transpose(RS)n (an array for each normal n)
+    // Y will store clipVolumeProjections - dotProduct(P,n).
+
+    // Therefore, box projections overlap if: the range [Y[0],Y[1]] overlaps [min,max] of dotProduct(untransformed corner of node box,X).
+    // clipvolume projection contains point projection if: the range [Y[0],Y[1]] contains dotProduct(untransformed point,X).
+    let X = normals.map(normal =>
+      normal.applyMatrix3(new Matrix3().setFromMatrix4(sourcePointcloud.matrix).transpose())
+    )
+
+    let Y = normals.map((normal,i) => 
+      [clipVolumeProjections[i][0]-sourcePointcloud.position.dot(normal),clipVolumeProjections[i][1]-sourcePointcloud.position.dot(normal)]
+    );
+
+    return {X,Y};
   }
 
-  // Filtering method for nodes which only accepts nodes that may have points inside a box volume.
-  export function clipVolumeNodeFilterMethod({normals, clipVolumeProjections}, node, pointcloud) {
-    // Project the node bounding box onto each normal.
-    let nodeProjections = getBoxProjections(normals, node, pointcloud);
+  // Filtering method for nodes which only accepts nodes that may have points which were initially located inside the clipping box.
+  export function clipVolumeNodeFilterMethod({X, Y}, node) {
+    return Y.every((y,i) => {
+      let min = 0;
+      let max = 0;
+      for(let dimension of ["x","y","z"]) {
+        if(X[i][dimension] >= 0) {
+          min += node.boundingBox.min[dimension] * X[i][dimension];
+          max += node.boundingBox.max[dimension] * X[i][dimension];
+        }
+        else {
+          max += node.boundingBox.min[dimension] * X[i][dimension];
+          min += node.boundingBox.max[dimension] * X[i][dimension];
+        }
+      }
 
-    // Compare the projections and check for overlap. 
-    // According to the separating axis theorem, two convex polyhedra intersect if and only if the projections of the polyhedra overlap
-    // for every normal of both polyhedra's faces. https://dyn4j.org/2010/01/sat/
-    return normals.every((_,i) =>
-      // If the A's min <= B's max and A's max >= B's min, then A and B are overlapping.
-      clipVolumeProjections[i][0] <= nodeProjections[i][1] && clipVolumeProjections[i][1] >= nodeProjections[i][0]
-    )
+      return y[0] <= max && y[1] >= min;
+    })
   }
 
   // Filtering method for points which only accepts points inside a box volume. Expects point to be a Vector3.
-  export function clipVolumePointFilterMethod({normals, clipVolumeProjections}, point) {
-    return normals.every((normal,i) => {
-      let projectedPoint = point.dot(normal);
-      return clipVolumeProjections[i][0] <= projectedPoint && projectedPoint <= clipVolumeProjections[i][1];
+  export function clipVolumePointFilterMethod({X, Y}, point) {
+    return Y.every((y,i) => {
+      let val = point[0] * X[i].x + point[1] * X[i].y + point[2] * X[i].z;
+
+      return y[0] <= val && y[1] >= val;
     });
   }
 
   
-  // maxDistancePrecomputedValues should be {squaredMaxDistance, targetKdTree} where targetPoints are in Vector3 form.
+  // maxDistancePrecomputedValues should be {squaredMaxDistance, targetKdTree, initialPclTransformation} where targetPoints are in Vector3 form.
+  // initialPclTransformation needs to have {matrix:Matrix4, rotation:Euler, scale:Vector3, position:Vector3}.
   
   // Filtering method for nodes which only accepts nodes that may have points within maxDistance of a target point.
-  export function maxDistanceNodeFilterMethod({squaredMaxDistance, targetKdTree}, node, pointcloud) {
+  export function maxDistanceNodeFilterMethod({squaredMaxDistance, targetKdTree, initialPclTransformation}, node) {
     if(squaredMaxDistance < 0)
       return false;
     
-    // Once the original bounding box is transformed (including rotation,scale,position) then widenedBox will be a new axis-aligned box surrounding the old box
+    // Once the node bounding box is transformed according to initialPclTransformation, then widenedBox will be a new axis-aligned box surrounding the old box
     // with extra room = maxDistance, so any qualifying points must be inside it.
-    // Nodes all have same rotation and scale, so the relationship between position and widenedBox could be pre-comupted, but it is not very expensive.
-    let projs = getBoxProjections([new Vector3(1,0,0), new Vector3(0,1,0), new Vector3(0,0,1)], node, pointcloud);
+    // Transformation is always the same, so some more work could be pre-comupted, but it is not very helpful.
+    let projs = getBoxProjections([new Vector3(1,0,0), new Vector3(0,1,0), new Vector3(0,0,1)], node, initialPclTransformation);
     let widenedBoxMin = {};
     let widenedBoxMax = {};
     for(let i = 0; i < 3; i++) {
@@ -66,16 +102,19 @@ import { waitForDef, matrix4ToMlmatrix, mlmatrixConcat, arrayRandomSubset } from
     // Greatly reduce the size of the targetPoints to search by selecting only those in widenedBox.
     let candidatePoints = targetKdTree.subsection(widenedBoxMin, widenedBoxMax);
 
-    // Apply scale to the bounding box, and reverse position and rotation to the targetPoints, because it's easier and equivalent to just applying all to the bounding box.
-    // Rotating the bounding box messes up the method of determining if the point is inside.
-    let min = node.boundingBox.min.clone().multiply(pointcloud.scale);
-    let max = node.boundingBox.max.clone().multiply(pointcloud.scale);
-    let reverseOrder = pointcloud.rotation.order[2] + pointcloud.rotation.order[1] + pointcloud.rotation.order[0]; // String reversal of "XYZ" or similar.
-    let reverseRotation = new Euler(-pointcloud.rotation.x, -pointcloud.rotation.y, -pointcloud.rotation.z, reverseOrder);
+    // Instead of applying rotation, scale, and position to the node box, then checking for target points inside:
+    // Apply scale to the bounding box, and reverse position and rotation to the targetPoints.
+    // This keeps box axis-aligned so max and min corners work right. 
+    // Rotation and scale are interchangeable, but position must be applied last. Or reverse-position must be applied first.
+    let min = node.boundingBox.min.clone().multiply(initialPclTransformation.scale);
+    let max = node.boundingBox.max.clone().multiply(initialPclTransformation.scale);
+    // String reversal of "XYZ" or similar.
+    let reverseOrder = initialPclTransformation.rotation.order[2] + initialPclTransformation.rotation.order[1] + initialPclTransformation.rotation.order[0]; 
+    let reverseRotation = new Euler(-initialPclTransformation.rotation.x, -initialPclTransformation.rotation.y, -initialPclTransformation.rotation.z, reverseOrder);
 
     // See if any point is in range.
     return candidatePoints.some(targetPoint => {
-      let newTargetPoint = targetPoint.clone().sub(pointcloud.position).applyEuler(reverseRotation);
+      let newTargetPoint = targetPoint.clone().sub(initialPclTransformation.position).applyEuler(reverseRotation);
       let x = Math.max(0, newTargetPoint.x - max.x, min.x - newTargetPoint.x);
       let y = Math.max(0, newTargetPoint.y - max.y, min.y - newTargetPoint.y);
       let z = Math.max(0, newTargetPoint.z - max.z, min.z - newTargetPoint.z);
@@ -83,93 +122,85 @@ import { waitForDef, matrix4ToMlmatrix, mlmatrixConcat, arrayRandomSubset } from
     });
   }
 
-  // Filtering method for points which only accepts points within maxDistance of a target point. Expects point to be Vector3 and targetKdTree to be kdTree of Vector3 points.
-  export function maxDistancePointFilterMethod({squaredMaxDistance, targetKdTree}, point) {
-    return targetKdTree.searchExistence(point,squaredMaxDistance);
+  // Filtering method for points which only accepts points initially within maxDistance of a target point. Expects point to be an array and targetKdTree to be kdTree of Vector3 points.
+  export function maxDistancePointFilterMethod({squaredMaxDistance, targetKdTree, initialPclTransformation}, point) {
+    let vectorPoint = new Vector3(...point).applyMatrix4(initialPclTransformation.matrix);
+    return targetKdTree.searchExistence(vectorPoint,squaredMaxDistance);
   }
 
-  // If the normal was extended into an infinite line, and the box was projected onto this line, 
-  // this returns the interval on the line that the projection covers. (Repeated for each normal).
-  // Projections may be stretched by normal's length. Best to have unit length if that matters.
+// Apply transformation onto bounding box, then find the range [min,max] of dotProduct(corner of box,n), which is its projection range.
+  // If normal isn't a unit vector, [min,max] will be stretched equal to normal's length.
   function getBoxProjections(normals, boundingBoxHolder, transformationHolder) {
-    // Transform all 8 corners in advance. This is because normals will contain triplets of orthogonal vectors,
-    // which require 6 distinct corners, overlapping between triplets.
-    // This formation makes the opposite of cornerPoints[P] to be cornerPoints[7-P]
+    // Make cornerPoints array. The opposite corner of cornerPoints[P] will be cornerPoints[7-P].
     let cornerPoints = Array(8);
     for(let i = 0; i < 8; i++) {
       cornerPoints[i] = new Vector3(
         boundingBoxHolder.boundingBox[i % 2 ? "max" : "min"].x,
         boundingBoxHolder.boundingBox[Math.floor(i/2) % 2 ? "max" : "min"].y,
         boundingBoxHolder.boundingBox[Math.floor(i/4) % 2 ? "max" : "min"].z
-      ).applyEuler(transformationHolder.rotation).multiply(transformationHolder.scale).add(transformationHolder.position);
+      // Transform all 8 corners in advance.
+      ).applyMatrix4(transformationHolder.matrix);
     }
 
-    // The plan is to rotate unit vectors along with the box, then see which unit vectors point along with or against the normal.
-    // Follow all the unit vectors pointing with the normal to find the max corner. Follow the ones pointing against to find the min corner.
-    // (unless scale is negative, which would swap them)
     return normals.map(normal => {
+      // Rotate unit vectors using rotation of the box. This means these vectors are parallel to the box's edges.
+      // Find if the box's edges projected onto normal are positive or negative. Follow the negative edges to reach the min corner.
       let minProjIdx = 0;
-      if(new Vector3(1,0,0).applyEuler(transformationHolder.rotation).dot(normal) > 0)
+      if(new Vector3(1,0,0).applyEuler(transformationHolder.rotation).dot(normal) < 0)
         minProjIdx += 1;
-      if(new Vector3(0,1,0).applyEuler(transformationHolder.rotation).dot(normal) > 0)
+      if(new Vector3(0,1,0).applyEuler(transformationHolder.rotation).dot(normal) < 0)
         minProjIdx += 2;
-      if(new Vector3(0,0,1).applyEuler(transformationHolder.rotation).dot(normal) > 0)
+      if(new Vector3(0,0,1).applyEuler(transformationHolder.rotation).dot(normal) < 0)
         minProjIdx += 4;
-      
-      let minProj = cornerPoints[minProjIdx].dot(normal);
-      let maxProj = cornerPoints[7-minProjIdx].dot(normal);
 
-      if(transformationHolder.scale > 0)
-        return [minProj, maxProj];
-      else
-        return [maxProj, minProj];
+      // If scale is negative, it must be swapped. The opposite corner to idx is 7-idx.
+      if(transformationHolder.scale < 0)
+        minProjIdx = 7 - minProjIdx;
+
+      return [
+        cornerPoints[minProjIdx].dot(normal),
+        cornerPoints[7-minProjIdx].dot(normal)
+      ];
     });
   }
 
   // Returns an mlmatrix containing the points, taken from the given nodes, filtered according to pointFilterMethod.
-  export async function getPointsMatrixFromNodes(nodes, pointcloud, pointFilterMethod, pointFilterPrecomputedValues) {
-    let pointcloudTransformation =  
-    new Matrix4().makeTranslation(pointcloud.position.x,pointcloud.position.y,pointcloud.position.z).multiply(
-      new Matrix4().makeScale(pointcloud.scale.x,pointcloud.scale.y,pointcloud.scale.z).multiply(
-        new Matrix4().makeRotationFromEuler(pointcloud.rotation)
-    ))
-    return new Mlmatrix(
-      // Maps nodes to an array of promises for their points, then await to get an array of every array of points. Then flatten and filter to get an array of array-points.
-      (await Promise.all(nodes.map(async node => {
-        // Extract point data from the node.
-        loadNode(node);
-        let position = await waitForDef(()=>node.position);
-        // Each point is a row for now, because it make things faster. But it will be converted to columns later.
-        let pointsMatrix = Mlmatrix.from1DArray(node.numPoints,3,position.array)
-          // Add a column of ones for the 4D transformation matrix.
-          .addColumn((new Array(node.numPoints)).fill(1));
+  async function getPointsMatrixFromNodes(nodes, pointcloud, pointFilterMethod, pointFilterPrecomputedValues) {
+    // Combine all nodes into a single 2D array where each row is a point, and there is an extra column of 1s for transformation purposes.
+    let allPointData = (await Promise.all(nodes.map(async node => {
+      // Extract 1D array of point data from the node.
+      loadNode(node);
+      let pointData1D = (await waitForDef(()=>node.position)).array;
 
-        /* TEST CODE: Tests node transformation. Both of these should result in the same values. Currently passing. * /
-          console.log(new Vector3(1,4,3.7).applyMatrix4(new Matrix4().multiplyMatrices(
-            pointcloudMatrix, 
-            new Matrix4().makeTranslation(node.boundingBox.min.x,node.boundingBox.min.y,node.boundingBox.min.z)
-          )));
-          
-          console.log(new Vector3(1,4,3.7).add(node.boundingBox.min).applyEuler(pointcloud.rotation).multiply(pointcloud.scale).add(pointcloud.position));
-        /**/
+      // Make it a 2D array of [x,y,z] points.
+      let pointData = Array(node.numPoints);
+      for(let i = 0; i < node.numPoints; i++)
+        pointData[i] = pointData1D.slice(i*3, i*3+3);
 
-        // The transformation matrix to apply to the points of this node. 
-        let nodeTransformation = matrix4ToMlmatrix(
-          new Matrix4().multiplyMatrices(
-            pointcloudTransformation, 
-            new Matrix4().makeTranslation(node.boundingBox.min.x,node.boundingBox.min.y,node.boundingBox.min.z)
-        ));
-        // Transpose the transformation and multiply it on the right instead of left, because pointsMatrix is transposed.
-        let transformedPointsMatrix = pointsMatrix.mmul(nodeTransformation.transpose());
-        console.log("transformed the points according to the node and pointcloud.")
-        // Filter points according to pointFilterMethod.
-        let filteredPointsArray = transformedPointsMatrix.data.filter(point => pointFilterMethod(pointFilterPrecomputedValues, new Vector3(...point)));
-        console.log("filtered points")
-        return filteredPointsArray;
-      })))
-      // Flatten to get a single array of points.
-      .flat()
-    ).transpose();
+      // Filter points according to pointFilterMethod.
+      let filteredPointData = pointData.filter(point => pointFilterMethod(pointFilterPrecomputedValues, point));
+      console.log("filtered points")
+      
+      // The transformation matrix to apply to the points of this node: combines pointcloud's transformation and node's position offset. 
+      let nodeTransformation = matrix4ToMlmatrix(
+        new Matrix4().multiplyMatrices(
+          pointcloud.matrix, 
+          new Matrix4().makeTranslation(node.boundingBox.min.x,node.boundingBox.min.y,node.boundingBox.min.z)
+      ));
+
+      // Convert 2D array to Mlmatrix, and add a column of 1s, to make a transformable points matrix
+      // (but it is transposed because each point is a row instead of a column)
+      let pointsMatrix = new Mlmatrix(filteredPointData).addColumn(new Array(filteredPointData.length).fill(1));
+      
+      // Apply the transformation to the points (in a transposed way) then extract the row data as a 2D array again to return.
+      transformedPointData = pointsMatrix.mmul(nodeTransformation.transpose()).data;
+      console.log("transformed the points according to the node and pointcloud.")
+
+      return transformedPointData;
+    // Combine each node's returned 2D array into a single 2D array
+    }))).flat();
+    // Convert to Mlmatrix and transpose so each point is a column.
+    return new Mlmatrix(allPointData).transpose();
   }
 
   // This method returns N points from the pointcloud.
@@ -178,12 +209,13 @@ import { waitForDef, matrix4ToMlmatrix, mlmatrixConcat, arrayRandomSubset } from
   // 
   // Fully exhausted depths do not need to be searched next time because their points will be stored in exhaustedPointsMatrix
   // which should be passed back into the function on the next call. On the first call it should be new Mlmatrix(0,0).
-  // The first unexhausted depth will be stored in unexhaustedNodes. On the first call it should be getRootNode(pointcloud).
+  // The shallowest unexhausted depth will be stored in unexhaustedNodes. On the first call it should be getRootNode(pointcloud).
+  //
+  // The inputted transformation is not yet applied to the inputs, and should not be applied to the outputs.
   //
   // Returns [N points Mlmatrix, exhaustedPointsMatrix, unexhaustedNodes]
-  export async function getNPointsMatrix(N, exhaustedPointsMatrix, unexhaustedNodes, 
-  pointcloud, nodeFilterMethod, nodeFilterPrecomputedValues, pointFilterMethod, pointFilterPrecomputedValues) {
-
+  export async function getNPointsMatrix(N, exhaustedPointsMatrix, unexhaustedNodes, pointcloud, 
+    nodeFilterMethod, pointFilterMethod, filterPrecomputedValues) {
     // Subtract already found points from target N.
     N = Math.floor(N) - exhaustedPointsMatrix.columns;
     // Finish early if N is already reached.
@@ -194,7 +226,7 @@ import { waitForDef, matrix4ToMlmatrix, mlmatrixConcat, arrayRandomSubset } from
     // This loop fully exhausts depths of the pointcloud.
     while(true) {
       // Update unexhaustedPointsMatrix to the satisfactory points from this depth.
-      unexhaustedPointsMatrix = await getPointsMatrixFromNodes(unexhaustedNodes, pointcloud, pointFilterMethod, pointFilterPrecomputedValues);
+      unexhaustedPointsMatrix = await getPointsMatrixFromNodes(unexhaustedNodes, pointcloud, pointFilterMethod, filterPrecomputedValues);
 
       // If there are no more depths, quit exhausting depths.
       if(unexhaustedNodes.length == 0)
@@ -208,7 +240,7 @@ import { waitForDef, matrix4ToMlmatrix, mlmatrixConcat, arrayRandomSubset } from
       exhaustedPointsMatrix = mlmatrixConcat(exhaustedPointsMatrix, unexhaustedPointsMatrix);
       N -= unexhaustedPointsMatrix.columns;
       // Descend to the next depth.
-      unexhaustedNodes = await getNextDepthOfNodes(unexhaustedNodes, pointcloud, nodeFilterMethod, nodeFilterPrecomputedValues);
+      unexhaustedNodes = await getNextDepthOfNodes(unexhaustedNodes, nodeFilterMethod, filterPrecomputedValues);
     }
    
     // Sample points from the next depth of the pointcloud, if it can and if it needs to.
@@ -226,19 +258,18 @@ import { waitForDef, matrix4ToMlmatrix, mlmatrixConcat, arrayRandomSubset } from
     return [sampledPointsMatrix, exhaustedPointsMatrix, unexhaustedNodes];
   }
 
-  // If depth == 0, use the pointcloud's root. Else, take the children of the previous array of nodes.
+  // Take the children of the previous array of nodes.
   // Filter according to nodeFilterMethod, and load so they can be accessed.
   // Precomputed values are values that are the same for all nodes/points and are expensive to compute every time. 
   // It is better to compute them just once and pass them into the function.
-  export async function getNextDepthOfNodes(prevNodes, pointcloud, nodeFilterMethod, nodeFilterPrecomputedValues, depth = 1) {
-    let newNodes = [];
-    if(depth == 0)
-      newNodes = [await getRootNode(pointcloud)]
-    else
-      newNodes = (await Promise.all(prevNodes.map(async node =>
-        Object.values(await waitForDef(() => node.children))
-      ))).flat();
-    return newNodes.filter(node => nodeFilterMethod(nodeFilterPrecomputedValues, node, pointcloud));
+  async function getNextDepthOfNodes(prevNodes, nodeFilterMethod, nodeFilterPrecomputedValues) {
+    // Get the children of each node.
+    let newNodes = (await Promise.all(prevNodes.map(async node =>
+      Object.values(await waitForDef(() => node.children))
+    // Combine arrays of children into a single array of children.
+    ))).flat();
+    // Filter the children using nodeFilterMethod.
+    return newNodes.filter(node => nodeFilterMethod(nodeFilterPrecomputedValues, node));
   }
 
   // Copies the root of the pointcloud so that loading its children doesn't affect which points are loaded in the rendered scene
