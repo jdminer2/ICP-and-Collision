@@ -1,12 +1,12 @@
 import {IFCLoader} from "web-ifc-three/IFCLoader"
 import {AmbientLight, DirectionalLight, Matrix4, Object3D, Vector3, Euler} from "three";
 import { multiScaleICP, testGetBestTransformation } from "./icp";
-import { waitForDef } from "./utils";
+import { initializePclCropTextboxes, updatePointcloudTextboxes, updateSchematicTextboxes, waitForDef } from "./utils";
 import { OBJLoader } from "../libs/three.js/loaders/OBJLoader.js";
 
 // Must point to the metadata.json file for the pointcloud, with related files nearby as described in the README.
-//let potreeFilePath = "./geometryFiles/0611File/0611/metadata.json";
-let potreeFilePath = "./geometryFiles/jointFile/joint/metadata.json"; 
+//let pointcloudFilePath = "./geometryFiles/0611File/0611/metadata.json";
+let pointcloudFilePath = "./geometryFiles/jointFile/joint/metadata.json"; 
 // Schematic must end in .ifc or .obj
 //let schematicFilePath = "./geometryFiles/0611File/mccormick-0416-research.ifc";
 let schematicFilePath = "./geometryFiles/jointFile/joint_model.obj";
@@ -16,17 +16,17 @@ let schematicFilePath = "./geometryFiles/jointFile/joint_model.obj";
 //
 // Negative scales are not advised for ICP testing, because negative scales mirror the object and turn right-handed into left-handed,
 // and this ICP cannot go to negative scales or mirror the object back.
-function generateTransformationMatrix(xRot,yRot,zRot,scale,xMove,yMove,zMove) {
+function generateTransformationMatrix(xMove,yMove,zMove,xRot,yRot,zRot,scale) {
+    let moveMatrix = new Matrix4().makeTranslation(xMove,yMove,zMove);
     let rotMatrix = new Matrix4().makeRotationFromEuler(new Euler(xRot,yRot,zRot));
     let scaleMatrix = new Matrix4().makeScale(scale,scale,scale);
-    let moveMatrix = new Matrix4().makeTranslation(xMove,yMove,zMove);
 
     return moveMatrix.multiply(scaleMatrix.multiply(rotMatrix))
 }
 
 // To uniformly range across all possible rotations, use maxXRot pi/2, maxYRot pi, and maxZRot pi.
 // maxScaleFactor should be greater than 0, or else very tiny chance of divide-by-zero, and small chance size will be very large.
-function randomTransformationMatrix(maxXRot,maxYRot,maxZRot,maxScaleFactor,maxXMove,maxYMove,maxZMove) {
+function randomTransformation(maxXMove,maxYMove,maxZMove,maxXRot,maxYRot,maxZRot,maxScaleFactor) {
     // Returns a random value between A and B. It doesn't matter whether A or B is greater.
     function randRange (A,B) {
         let x = Math.random();
@@ -43,114 +43,125 @@ function randomTransformationMatrix(maxXRot,maxYRot,maxZRot,maxScaleFactor,maxXM
     let yMove = randRange(-maxYMove,maxYMove);
     let zMove = randRange(-maxZMove,maxZMove);
 
-    console.log(xRot,yRot,zRot,scale,xMove,yMove,zMove);
-    return generateTransformationMatrix(xRot,yRot,zRot,scale,xMove,yMove,zMove);
+    console.log(xMove,yMove,zMove,xRot,yRot,zRot,scale);
+    return [xMove,yMove,zMove,xRot,yRot,zRot,scale];
 }
 
-let initialGuess;
-initialGuess = generateTransformationMatrix(0,0,0,1,0,0,0);
-//initialGuess = randomTransformationMatrix(0.1,0.1,0.1,1.1,10,10,10);
-//initialGuess = generateTransformationMatrix(-0.096187,0.074300,-0.024604,1.034383,-0.498889,-8.420134,-9.227480)
-
 async function initialize() {
-    loadViewer();
-    testGetBestTransformation();
+    window.removeEventListener("load",initialize);
+
+    // Setup viewer, load schematic and pointcloud from file.
+    setupViewer();
     [viewer.schematic, viewer.pointcloud] = await Promise.all([
         loadSchematic(schematicFilePath),
-        loadPotree(potreeFilePath)
+        loadPointcloud(pointcloudFilePath)
     ]);
-    console.log(viewer.schematic);
-    console.log(viewer.pointcloud);
-    console.log(viewer);
-    [viewer.clipVolume, viewer.pclOffset] = createVolumeTools(viewer.schematic, viewer.pointcloud);
-    window.removeEventListener("load",initialize);
-    viewer.pointcloud.applyMatrix4(initialGuess);
+
+    // Rotate the pointcloud (testing purposes)
+    // let initialMatrix = randomTransformation(10,10,10,0.1,0.1,0.1,1.1);
+    // let initialMatrix = [-0.498889,-8.420134,-9.227480,-0.096187,0.074300,-0.024604,1.034383];
+    // pointcloud.applyMatrix4(initialMatrix);
+
+    // Create transformation tools.
+    createTransformationTools(viewer.schematic, viewer.pointcloud);
+
+    // Update textbox values.
+    updateSchematicTextboxes();
+    updatePointcloudTextboxes();
+    initializePclCropTextboxes();
+
+    // Tests whether ICP's single-iteration transformation-finding function is optimal.
+    // testGetBestTransformation();
+    
+    // Make event listener for ICP button.
     $('#runICPButton').on("click", (e)=>{
-        multiScaleICP(viewer.schematic,viewer.pointcloud,viewer.clipVolume).then(transformationMatrix=>
-            {}
-        );
-    });    
+        multiScaleICP(viewer.schematic,viewer.pointcloud,viewer.clipVolume).then(transformationMatrix=>{
+            updatePointcloudTextboxes();
+        });
+    });
 }
 window.addEventListener("load",initialize);
 
 
+function createTransformationTools(schematic, pointcloud) {
+    /* 
+        For each object (pointcloud and schematic) there are 3 sets of position, rotation, scale coordinates:
+        1. The textbox's listed position, rotation, scale.
+        2. The volume tool's position, rotation, scale in the scene.
+        3. The object's position, rotation, scale in the scene.
+        There are some issues with the differences between these.
+        
+        First, the textbox will only have one scale parameter, for uniform scale changes, 
+        even though the object may have different scale values for each dimension. Therefore, a scale factor vector will be tracked.
+        Multiply textbox scale by objectScaleFactor to get object scale.
 
-function createVolumeTools(schematic, pointcloud) {
-    function scaleCoords(boundingBox){
-        return ['x','y','z'].map(dim=>
-            boundingBox.max[dim] - boundingBox.min[dim]
-        )
-    }
-    function positionCoords(boundingBox,position){
-        return ['x','y','z'].map(dim=>
-            (boundingBox.max[dim] + boundingBox.min[dim])/2 + position[dim]
-        )
-    }
+        Second, if an object's scale is small (after scale factor), it may still be very big in the scene,
+        because the object's scale does not say anything about the size and positioning of triangles or points belonging to the object.
+        Meanwhile, if the volume tool's scale is small like (1,1,1), it will be small in the scene, like a 1x1x1 box.
+        This could make volume tool and scale handles very tiny relative to the object, making it hard to use. Therefore, a second scale factor will be tracked.
+        Multiply textbox scale by volumeScaleFactor to get volume tool scale.
 
-    // Create movement tool for the schematic.
-    schematic.geometry.computeBoundingBox();
-    let schemBoundingBox = schematic.geometry.boundingBox.clone();
+        Third, rotation and scale will occur about the object's position.
+        However, all the triangles or points parented to the object may be far off to the side, 
+        so the rotation and scaling may not look like it's about the center of the object.
+        It may be better if rotation and scaling happen about the object's center of bounding box. Therefore, a position offset is tracked.
+        Add position offset (with rotation and scale applied to it) to object position to get textbox position, volume tool position, and center of rotation/scaling.
+        (it is not the internal center of rotation/scaling, but we make adjustments so that inputted rotations and scales seem to occur about it)
+
+        Fourth, the schematic seems to be rotated Pi/2 compared to everything else, causing problems
+    */
+
+    // Create schematic volume tool
+    let schemVolume = new Potree.BoxVolume();
+    viewer.scene.addVolume(schemVolume);
+    viewer.schemVolume = schemVolume;
+    schemVolume.name = "Schem Bounding Box";
+    schemVolume.visible = false;
+    schemVolume.position = new Vector3();
+    schemVolume.rotation = new Euler();
+    schemVolume.scale = new Vector3(1,1,1);
+
+    // Force schematic bounding box to generate.
+    viewer.schematic.geometry.computeBoundingBox();
+    // Correct differences between scene coordinate space and schematic coordinate space.
+    let schemBoundingBox = viewer.schematic.geometry.boundingBox.clone();
     let temp = [schemBoundingBox.min.y,schemBoundingBox.max.y];
     schemBoundingBox.min.y = -1 * schemBoundingBox.max.z;
     schemBoundingBox.max.y = -1 * schemBoundingBox.min.z;
     schemBoundingBox.min.z = temp[0];
     schemBoundingBox.max.z = temp[1];
-    let schemPosition = schematic.position;
-    let schemVolume = new Potree.BoxVolume();
-    schemVolume.scale.copy(schemBoundingBox.max.clone().sub(schemBoundingBox.min));
-    schemVolume.position.copy(schemBoundingBox.max.clone().add(schemBoundingBox.min).divideScalar(2).add(schemPosition));
-    schemVolume.name = "Schem Bounding Box";
-    schemVolume.visible = false;
-    viewer.scene.addVolume(schemVolume);
+    // Compute offsets
+    schemVolume.objectScaleFactor = schematic.scale.clone();
+    schemVolume.volumeScaleFactor = schemBoundingBox.max.clone().sub(schemBoundingBox.min);
+    schemVolume.positionOffset = schemBoundingBox.max.clone().add(schemBoundingBox.min).divideScalar(2);
 
-    // Create movement tool for the pointcloud.
+    // Create pointcloud volume tool.
     let pclVolume = new Potree.BoxVolume();
-    let pclBoundingBox = pointcloud.boundingBox;
-    let pclPosition = pointcloud.position
-    pclVolume.scale.copy(pclBoundingBox.max.clone().sub(pclBoundingBox.min));
-    pclVolume.position.copy(pclBoundingBox.max.clone().add(pclBoundingBox.min).divideScalar(2).add(pclPosition));
+    viewer.scene.addVolume(pclVolume);
+    viewer.pclVolume = pclVolume;
     pclVolume.name = "Pcl Bounding Box";
     pclVolume.visible = false;
-    viewer.scene.addVolume(pclVolume);
+    pclVolume.position = new Vector3();
+    pclVolume.rotation = new Euler();
+    pclVolume.scale = new Vector3(1,1,1);
 
-    // Create movement tool for the clipping box.
+    // Compute offsets.
+    pclVolume.objectScaleFactor = pointcloud.scale.clone();
+    pclVolume.volumeScaleFactor = pointcloud.boundingBox.max.clone().sub(pointcloud.boundingBox.min);
+    pclVolume.positionOffset = pointcloud.boundingBox.max.clone().add(pointcloud.boundingBox.min).divideScalar(2);
+
+    // Create clipping box volume tool.
     let clipVolume  = new Potree.BoxVolume();
-    clipVolume.scale.copy(schemVolume.scale.clone().multiply(new Vector3(1, 1, 1)));
-    clipVolume.position.copy(schemVolume.position);
+    viewer.scene.addVolume(clipVolume);
+    viewer.clipVolume = clipVolume;
     clipVolume.name = "Pcl Cropping Box";
     clipVolume.clip = true;
-    viewer.scene.addVolume(clipVolume);
-
-    /* 
-        There are 3 sets of coordinates:
-        1. The pointcloud's position, rotation, and scale.
-        2. The bounding box's position, rotation, and scale.
-        3. The user input position, rotation, and scale.
-        It will not be possible to have all of these equal. These parameters will help.
-        
-        userTextboxDiscrepancy: boundingBoxCenter is not at (0,0,0) initially, 
-        but user textboxes for position probably should be at (0,0,0) initially. This accounts for that
-        pointcloudDiscrepancy: difference between pointcloud center and boundingbox center. 
-        This vector will be affected by rotation and scale transformations applied to the pointcloud.
-        scaleFactor: when user textbox's scale is (1,1,1), then pointcloud's scale will be (1,1,1), 
-        but bounding box must be larger to fit around the pointcloud. This accounts for that.
-        
-        bounding box's position = user textbox position + userTextboxDiscrepancy
-        pointcloud's position = bounding box's position + (pointcloudDiscrepancy with pointcloud's rotation and scale applied)
-        pointcloud's scale = user textbox scale
-        bounding box's scale = pointcloud's scale * scaleFactor
-    */
-    let pclOffset = {
-        userTextboxDiscrepancy: pclVolume.position.clone(),
-        pointcloudDiscrepancy: pointcloud.position.clone().sub(pclVolume.position),
-        scaleFactor: pclVolume.scale.clone()
-    };
-    
-    return [clipVolume, pclOffset];
+    clipVolume.position = new Vector3();
+    clipVolume.rotation = new Euler();
+    clipVolume.scale = new Vector3(1,1,1);
 }
 
-
-function loadViewer() {
+function setupViewer() {
     // Potree loading and rendering
     window.viewer = new Potree.Viewer(document.getElementById("potree_render_area"));
     viewer.setEDLEnabled(true);
@@ -167,7 +178,7 @@ function loadViewer() {
     });
 }
 
-async function loadPotree(filePath) {
+async function loadPointcloud(filePath) {
     return await Potree.loadPointCloud(filePath, "pointCloud").then(e => {
         e.pointcloud.name = "Pointcloud";
         viewer.scene.addPointCloud(e.pointcloud);

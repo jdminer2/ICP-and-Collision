@@ -198,3 +198,55 @@ export function sumPreservingRound(array) {
 
     return roundedArray;
 }
+
+export function updateSchematicTextboxes() {
+    // viewer.js has code to translate from textbox properties to object properties.
+    // This does the inverse, to translate object properties to textbox properties for inputting into setSchemParam.
+    
+    // Correction for flipped dimensions
+    let schemBoundingBox = viewer.schematic.geometry.boundingBox.clone();
+    let temp = [schemBoundingBox.min.z,schemBoundingBox.max.z];
+    schemBoundingBox.min.z = -1 * schemBoundingBox.max.y;
+    schemBoundingBox.max.z = -1 * schemBoundingBox.min.y;
+    schemBoundingBox.min.y = temp[0];
+    schemBoundingBox.max.y = temp[1];
+
+    let textBoxScale = viewer.schematic.scale.clone().divide(viewer.schemVolume.objectScaleFactor).x;
+
+    let objectRotation = viewer.schematic.rotation.clone();
+    objectRotation.order = "XZY";
+    let adjustedPositionOffset = viewer.schemVolume.positionOffset.clone().applyEuler(objectRotation).multiply(viewer.schematic.scale);
+
+    let textboxPosition = viewer.schematic.position.clone().add(adjustedPositionOffset);
+    // Update schematic textboxes.
+    ["x","y","z"].forEach(dimension => {
+        viewer.setSchemParam("position",dimension,textboxPosition[dimension]);
+        viewer.setSchemParam("rotation",dimension,viewer.schematic.rotation[dimension]);
+    });
+    viewer.setSchemParam("scale","all",textBoxScale);
+
+}
+
+export function updatePointcloudTextboxes() {
+    // viewer.js has code to translate from textbox properties to object properties.
+    // This does the inverse, to translate object properties to textbox properties for inputting into setPclParam.
+    let pointcloudPosition = viewer.pointcloud.position.clone();
+    let pointcloudRotation = viewer.pointcloud.rotation.clone();
+    let pointcloudScale = viewer.pointcloud.scale.x;
+
+    pointcloudScale /= viewer.pclVolume.objectScaleFactor.x;
+    pointcloudPosition.add(viewer.pclVolume.positionOffset.clone().applyEuler(pointcloudRotation).multiplyScalar(pointcloudScale));
+    // Update pointcloud textboxes.
+    ["x","y","z"].forEach(dimension => {
+        viewer.setPclParam("position",dimension,pointcloudPosition[dimension]);
+        viewer.setPclParam("rotation",dimension,pointcloudRotation["_" + dimension]);
+    });
+    viewer.setPclParam("scale","all",pointcloudScale);
+}
+
+export function initializePclCropTextboxes() {
+    // Set values to equal the schemVolume tool.
+    for(parameter of ["position","rotation","scale"])
+        for(dimension of ["x","y","z"])
+            viewer.setPclCropParam(parameter,dimension,viewer.schemVolume[parameter][dimension]);
+}
