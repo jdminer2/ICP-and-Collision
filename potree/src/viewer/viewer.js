@@ -758,7 +758,6 @@ export class Viewer extends EventDispatcher{
 
 
 		// objectRotation.x += Math.PI/2;
-	
 
 		this.schematic.position.copy(objectPosition);
 		this.schematic.rotation.copy(objectRotation);

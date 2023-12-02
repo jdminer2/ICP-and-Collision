@@ -467,10 +467,25 @@ export class TransformationTool {
 				});
 				let functionName = {"Schem Bounding Box":"setSchemParam","Pcl Bounding Box":"setPclParam","Pcl Cropping Box":"setPclCropParam"}[selection.name];
 				let oldPosition = {...selection.position};
-				// Change rotation.
-				this.viewer[functionName]("rotation","x",newRotation._x);
-				this.viewer[functionName]("rotation","y",newRotation._y);
-				this.viewer[functionName]("rotation","z",newRotation._z);
+				// Change position.
+				if(selection.name === "Schem Bounding Box") {
+					let diff = {};
+					for(let dim of ["_x", "_y", "_z"])
+						diff[dim] = newRotation[dim] - oldRotation[dim];
+
+					console.log(oldRotation);
+					console.log(newRotation);
+					console.log(diff);
+
+					this.viewer[functionName]("rotation","x",newRotation._x-Math.PI/2);
+					this.viewer[functionName]("rotation","y",oldRotation._y + diff._z);
+					this.viewer[functionName]("rotation","z",oldRotation._z - diff._y);
+				}
+				else {
+					this.viewer[functionName]("rotation","x",newRotation._x);
+					this.viewer[functionName]("rotation","y",newRotation._y);
+					this.viewer[functionName]("rotation","z",newRotation._z);
+				}
 				// Change position so that the box doesn't appear to move from its offsets.
 				this.viewer[functionName]("position","x",oldPosition.x);
 				this.viewer[functionName]("position","y",oldPosition.y);

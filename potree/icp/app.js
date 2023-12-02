@@ -7,9 +7,10 @@ import { OBJLoader } from "../libs/three.js/loaders/OBJLoader.js";
 // Must point to the metadata.json file for the pointcloud, with related files nearby as described in the README.
 //let pointcloudFilePath = "./geometryFiles/0611File/0611/metadata.json";
 let pointcloudFilePath = "./geometryFiles/jointFile/joint/metadata.json"; 
+
 // Schematic must end in .ifc or .obj
-//let schematicFilePath = "./geometryFiles/0611File/mccormick-0416-research.ifc";
-let schematicFilePath = "./geometryFiles/jointFile/joint_model.obj";
+let schematicFilePath = "./geometryFiles/0611File/mccormick-0416-research.ifc";
+//let schematicFilePath = "./geometryFiles/jointFile/joint_model.obj";
 
 // Generate the transformation matrix corresponding to applying xRot about the x axis, then yRot about the newly shifted y axis,
 // then zRot about the newly shifted z axis, then scale, then xMove, yMove, zMove in the original coordinate space.
