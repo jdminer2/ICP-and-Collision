@@ -132,7 +132,7 @@ function areaOfTriangle(pointA,pointB,pointC) {
     ABdotAC+=(pointB[dim]-pointA[dim])*(pointC[dim]-pointA[dim])
     ACdotAC+=(pointC[dim]-pointA[dim])**2
   }
-  return Math.sqrt(ABdotAB*ACdotAC - ABdotAC**2)/2
+  return Math.sqrt(Math.max(0,ABdotAB*ACdotAC - ABdotAC**2))/2
 }
 
 
