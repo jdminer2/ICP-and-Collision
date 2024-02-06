@@ -131,6 +131,7 @@ import { waitForDef, matrix4ToMlmatrix, mlmatrixConcat, arrayRandomSubset } from
 // Apply transformation onto bounding box, then find the range [min,max] of dotProduct(corner of box,n), which is its projection range.
   // If normal isn't a unit vector, [min,max] will be stretched equal to normal's length.
   function getBoxProjections(normals, boundingBoxHolder, transformationHolder) {
+    transformationHolder.updateMatrix();
     // Make cornerPoints array. The opposite corner of cornerPoints[P] will be cornerPoints[7-P].
     let cornerPoints = Array(8);
     for(let i = 0; i < 8; i++) {
@@ -162,6 +163,16 @@ import { waitForDef, matrix4ToMlmatrix, mlmatrixConcat, arrayRandomSubset } from
         cornerPoints[7-minProjIdx].dot(normal)
       ];
     });
+
+    // This code is a faster version if transformationHolder contains 0 rotation and position and positive scale components.
+    /*
+    return normals.map(normal => {
+      return [
+        boundingBoxHolder.boundingBox.min.clone().multiply(transformationHolder.scale).dot(normal),
+        boundingBoxHolder.boundingBox.max.clone().multiply(transformationHolder.scale).dot(normal)
+      ];
+    });
+    */
   }
 
   // Returns an mlmatrix containing the points, taken from the given nodes, filtered according to pointFilterMethod.
