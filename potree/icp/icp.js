@@ -54,10 +54,10 @@ import { KDTree } from "./kdtree";
 // Tweakable. I am not sure the best parameters to set for these.
 function getOverallParameters() {
     return {
-        // A set of ICP iterations will be called a "depth". 
-        numDepths: 3,
-        // At earlier depths, sometimes no or very few points will be selected from the source pointcloud, and the transformation will be inaccurate.
-        // This parameter specifies a minimum number of found source points. If it is not met, the algorithm will move to the next depth.
+        // A set of ICP iterations will be called an iterationSet. 
+        numIterationSets: 3,
+        // At earlier iterationSets, sometimes no or very few points will be selected from the source pointcloud, and the transformation will be inaccurate.
+        // This parameter specifies a minimum number of found source points. If it is not met, the algorithm will move to the next iterationSet.
         minSamplePoints: 100,
         // If few points find neighbors, the transformation will be inaccurate.
         // This parameter specifies a minimum number of neighbor matchups.
@@ -65,13 +65,13 @@ function getOverallParameters() {
         // If many source points find only a few unique target points as neighbors, the transformation will be inaccurate.
         // This parameter specifies a minimum number of unique target point neighbors.
         minTargetMatches: 1,
-        // This number must be at least 1. The scale can only be multiplied or divided by this much at each depth of iterations.
+        // This number must be at least 1. The scale can only be multiplied or divided by this much at each iterationSet.
         // maxScalePerIteration: 1.1,
         // This number must be at least 1. The scale can only be multiplied or divided by this much overall.
         maxScaleChange: 100,
         // Seed for distributed point sampling from the schematic.
         schematicFirstSeed: 2000,
-        // The following parameters will change each depth, so they just have initial values of 0 that will be overwritten.
+        // The following parameters will change each iterationSet, so they just have initial values of 0 that will be overwritten.
         convergenceFitness: 0,
         convergenceRMSE: 0,
         numIterations: 0,
@@ -83,21 +83,21 @@ function getOverallParameters() {
 }
 
 // Tweakable. I am not sure the best parameters to set for these.
-function updateDepthParameters(depth,pointcloud,targetModel,parameters) {
-    // If change in fitness and RMSE between iterations is smaller than these thresholds, assume it converged, and increase the depth.
+function updateIterationSetParameters(iterationSet,pointcloud,targetModel,parameters) {
+    // If change in fitness and RMSE between iterations is smaller than these thresholds, assume it converged, and go to the next iterationSet.
     parameters.convergenceFitness = 0.01;
     parameters.convergenceRMSE = 0.01;
-    // If no convergence is reached, increase the depth after this many iterations.
-    parameters.numIterations = 2*2**(parameters.numDepths-depth+1);
+    // If no convergence is reached, go to the next iterationSet after this many iterations.
+    parameters.numIterations = 2*2**(parameters.numIterationSets-iterationSet+1);
     // The algorithm assumes the user roughly aligned the pointcloud on the schematic. After this alignment, points in the source pointcloud that are
     // farther than this distance from any points in the target scehmatic are considered irrelevant (this distance is measured before ICP's transformations)
     parameters.maxSampleDistance = 0.05 * Math.max(...(["x","y","z"].map(dim=>targetModel.geometry.boundingBox.max[dim] - targetModel.geometry.boundingBox.min[dim])));
     // The max range to search for neighbors (this distance is measured after ICP's transformations)
-    parameters.maxNeighborDistance = Infinity//0.05/2**depth * Math.max(...(["x","y","z"].map(dim=>targetModel.geometry.boundingBox.max[dim] - targetModel.geometry.boundingBox.min[dim])));//3*pointcloud.pcoGeometry.spacing/2**depth;
-    // How many schematic points should be used at this depth.
-    parameters.schematicSampleCount = 5000*1.1**depth;
-    // How many pointcloud points should be used at this depth.
-    parameters.pointcloudSampleCount = 5000*1.1**depth;
+    parameters.maxNeighborDistance = Infinity//0.05/2**iterationSet * Math.max(...(["x","y","z"].map(dim=>targetModel.geometry.boundingBox.max[dim] - targetModel.geometry.boundingBox.min[dim])));//3*pointcloud.pcoGeometry.spacing/2**iterationSet;
+    // How many schematic points should be used at this iterationSet.
+    parameters.schematicSampleCount = 5000*1.1**iterationSet;
+    // How many pointcloud points should be used at this iterationSet.
+    parameters.pointcloudSampleCount = 5000*1.1**iterationSet;
 }
 
 // The main function. 
@@ -132,8 +132,8 @@ export async function multiScaleICP(/*targetFilePath,*/ targetModel, sourcePoint
 
     let exhaustedPointsMatrix = new Mlmatrix(0,0);
     let unexhaustedNodes = [await getRootNode(sourcePointcloud)];
-    for(let depth = 0; depth <= parameters.numDepths; depth++) {
-        updateDepthParameters(depth,sourcePointcloud,targetModel,parameters);
+    for(let iterationSet = 0; iterationSet <= parameters.numIterationSets; iterationSet++) {
+        updateIterationSetParameters(iterationSet,sourcePointcloud,targetModel,parameters);
 
         console.log("Obtaining points from the schematic mesh.");
         // Obtain target points and put them in a kdTree.
@@ -150,7 +150,7 @@ export async function multiScaleICP(/*targetFilePath,*/ targetModel, sourcePoint
         filteringPrecomputedValues.squaredMaxDistance = parameters.maxSampleDistance ** 2;
         filteringPrecomputedValues.targetKdTree = targetKdTree;
         */
-        // Obtain the next set of points from the pointcloud for this depth and add them to the transformable matrix.
+        // Obtain the next set of points from the pointcloud for this iterationSet and add them to the transformable matrix.
         let newSourcePointsMatrix;
         [newSourcePointsMatrix, exhaustedPointsMatrix, unexhaustedNodes] = await getNPointsMatrix(parameters.pointcloudSampleCount, exhaustedPointsMatrix, unexhaustedNodes, 
             sourcePointcloud, filteringNodeFilterMethod, filteringPointFilterMethod, filteringPrecomputedValues);
@@ -169,7 +169,7 @@ export async function multiScaleICP(/*targetFilePath,*/ targetModel, sourcePoint
 
         // Skip the ICP iterations if there aren't enough points yet.
         if(sourceMatrix.columns < parameters.minSourcePoints) {
-            console.log("Not enough pointcloud points: proceeding to next depth.");
+            console.log("Not enough pointcloud points: proceeding to next iterationSet.");
             continue;
         }
 
@@ -177,8 +177,8 @@ export async function multiScaleICP(/*targetFilePath,*/ targetModel, sourcePoint
         let weights = new Array(sourceMatrix.columns).fill(1);
 
         let scale = 1;
-        // Perform one depth of ICP iterations.
-        let result = singleICPDepth(sourceMatrix,targetKdTree,weights,parameters,scale);
+        // Perform one iterationSet of ICP iterations.
+        let result = singleICPIterationSet(sourceMatrix,targetKdTree,weights,parameters,scale);
         scale = result.scale;
         if(isNaN(scale) || scale === Infinity || scale === -Infinity || scale === 0) {
             console.log("Scale became extreme. Aborting with no useful results.");
@@ -192,14 +192,14 @@ export async function multiScaleICP(/*targetFilePath,*/ targetModel, sourcePoint
         sourcePointcloud.applyMatrix4(resultMatrix4);
         afterPointsObjects.forEach(afterPointsObject => afterPointsObject.applyMatrix4(resultMatrix4));
 
-        console.log("Single depth transformation", result.transformation);
+        console.log("Single iterationSet transformation", result.transformation);
     }
 
     console.log("Overall transformation", overallTransformation);
     return overallTransformation;
 }
 
-function singleICPDepth(sourceMatrix,targetKdTree,weights,parameters,scale) {
+function singleICPIterationSet(sourceMatrix,targetKdTree,weights,parameters,scale) {
     let result = {transformation:new Mlmatrix([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]), scale:scale};
 
     // Choose closest neighbors in maxNeighborDistance and put the pairings in neighborSet.neighborPairs.
@@ -214,7 +214,7 @@ function singleICPDepth(sourceMatrix,targetKdTree,weights,parameters,scale) {
 
         // Check for enough points matched.
         if(neighborSet.neighborPairs.length < parameters.minSourceMatches) {
-            console.log("Too few source matches. Proceeding to next depth.");
+            console.log("Too few source matches. Proceeding to next iterationSet.");
             break;
         }
         let targetMatches = [];
@@ -233,7 +233,7 @@ function singleICPDepth(sourceMatrix,targetKdTree,weights,parameters,scale) {
             }
         }
         if(targetMatches.length < parameters.minTargetMatches) {
-            console.log("Too few unique target matches (" + targetMatches.length + "). Proceeding to next depth.");
+            console.log("Too few unique target matches (" + targetMatches.length + "). Proceeding to next iterationSet.");
             break;
         }
 
@@ -258,16 +258,16 @@ function singleICPDepth(sourceMatrix,targetKdTree,weights,parameters,scale) {
         neighborSet = findNeighbors(sourceMatrix,targetKdTree,parameters.maxNeighborDistance);
 
         // Possible causes: perfect fit, extremely few source points found neighbors, or sourcePoints shrank to 0.
-        // In any case, further progress at this depth is impossible.
+        // In any case, further progress at this iterationSet is impossible.
         if(neighborSet.RMSE == 0) {
-            console.log("RMSE is 0. Proceeding to next depth.");
+            console.log("RMSE is 0. Proceeding to next iterationSet.");
             break;
         }
 
         // Check convergence thresholds to determine if the transformation has stopped improving.
         if(Math.abs(prevFitness - neighborSet.fitness) < parameters.convergenceFitness 
             && Math.abs(prevRMSE - neighborSet.RMSE) < parameters.convergenceRMSE) {
-                console.log("Iterations have converged. Proceeding to next depth.");
+                console.log("Iterations have converged. Proceeding to next iterationSet.");
                 break;
         }
     }
