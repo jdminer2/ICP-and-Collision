@@ -103,9 +103,24 @@ function updateDepthParameters(depth,pointcloud,targetModel,parameters) {
 
 // The main function. 
 export async function multiScaleICP(/*targetFilePath,*/ targetModel, sourcePointcloud, clipVolume) {
+    /*
+    // Clip Volume Filter
+    let filteringNodeFilterMethod = clipVolumeNodeFilterMethod;
+    let filteringPointFilterMethod = clipVolumePointFilterMethod;
     let filteringPrecomputedValues = clipVolumePrecomputedValues(clipVolume,sourcePointcloud);
-    // let filteringPrecomputedValues = {squaredMaxDistance: parameters.maxSampleDistance ** 2, targetKdTree: null, 
-    //   {matrix:sourcePointcloud.matrix.clone(), rotation:sourcePointcloud.rotation.clone(), scale:sourcePointcloud.scale.clone(), position:sourcePointcloud.position.clone()}}
+    */
+    /* 
+    // Max Distance Filter. Also requires uncommenting code in a spot below
+    let filteringNodeFilterMethod = maxDistanceNodeFilterMethod;
+    let filteringPointFilterMethod = maxDistancePointFilterMethod;
+    let filteringPrecomputedValues = {squaredMaxDistance: parameters.maxSampleDistance ** 2, targetKdTree: null, 
+       {matrix:sourcePointcloud.matrix.clone(), rotation:sourcePointcloud.rotation.clone(), scale:sourcePointcloud.scale.clone(), position:sourcePointcloud.position.clone()}}
+    */
+    // Accept All filter
+    let filteringNodeFilterMethod = ()=>true;
+    let filteringPointFilterMethod = ()=>true;
+    let filteringPrecomputedValues = {};
+
     let overallTransformation = new Mlmatrix([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]);
 
     // Parameters for ICP.
@@ -131,12 +146,15 @@ export async function multiScaleICP(/*targetFilePath,*/ targetModel, sourcePoint
         console.log(targetPoints.length + " schematic points");
 
         console.log("Obtaining points from the pointcloud.");
-        // filteringPrecomputedValues.squaredMaxDistance = parameters.maxSampleDistance ** 2;
-        // filteringPrecomputedValues.targetKdTree = targetKdTree;
+        /*
+        // For Max Distance Filter only.
+        filteringPrecomputedValues.squaredMaxDistance = parameters.maxSampleDistance ** 2;
+        filteringPrecomputedValues.targetKdTree = targetKdTree;
+        */
         // Obtain the next depth of points from the pointcloud and add them to the transformable matrix.
         let newSourcePointsMatrix;
         [newSourcePointsMatrix, exhaustedPointsMatrix, unexhaustedNodes] = await getNPointsMatrix(parameters.pointcloudSampleCount, exhaustedPointsMatrix, unexhaustedNodes, 
-            sourcePointcloud, clipVolumeNodeFilterMethod, clipVolumePointFilterMethod, filteringPrecomputedValues);
+            sourcePointcloud, filteringNodeFilterMethod, filteringPointFilterMethod, filteringPrecomputedValues);
         let sourceMatrix = mlmatrixConcat(exhaustedPointsMatrix, newSourcePointsMatrix)
         // Render points.
         let beforePointsMatrix = inverse(overallTransformation).mmul(sourceMatrix);
