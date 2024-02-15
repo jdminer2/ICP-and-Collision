@@ -63,7 +63,7 @@ function getOverallParameters() {
         minSamplePoints: 100,
         // If few points find neighbors, the transformation will be inaccurate.
         // This parameter specifies a minimum number of neighbor matchups.
-        minSourceMatches: 50,
+        minSourceMatches: 1,
         // If many source points find only a few unique target points as neighbors, the transformation will be inaccurate.
         // This parameter specifies a minimum number of unique target point neighbors.
         minTargetMatches: 1,
