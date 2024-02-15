@@ -5,8 +5,8 @@ import { waitForDef } from "./utils";
 import { OBJLoader } from "../libs/three.js/loaders/OBJLoader.js";
 
 // Must point to the metadata.json file for the pointcloud, with related files nearby as described in the README.
-//let potreeFilePath = "./geometryFiles/0611File/0611/metadata.json";
-let potreeFilePath = "./geometryFiles/jointFile/joint/metadata.json"; 
+//let potreeFilePath = "./geometryFiles/0611File/metadata.json";
+let potreeFilePath = "./geometryFiles/jointFile/metadata.json"; 
 // Schematic must end in .ifc or .obj
 //let schematicFilePath = "./geometryFiles/0611File/mccormick-0416-research.ifc";
 let schematicFilePath = "./geometryFiles/jointFile/joint_model.obj";

@@ -139,14 +139,14 @@ export async function multiScaleICP(/*targetFilePath,*/ targetModel, sourcePoint
             sourcePointcloud, clipVolumeNodeFilterMethod, clipVolumePointFilterMethod, filteringPrecomputedValues);
         let sourceMatrix = mlmatrixConcat(exhaustedPointsMatrix, newSourcePointsMatrix)
         // Render points.
-        let beforePointsMatrix = inverse(overallTransformation).mmul(newSourcePointsMatrix);
+        let beforePointsMatrix = inverse(overallTransformation).mmul(sourceMatrix);
         let beforePointsArray = [];
         for(let i = 0; i < beforePointsMatrix.columns; i++)
             beforePointsArray.push(new Vector3(beforePointsMatrix.data[0][i],beforePointsMatrix.data[1][i],beforePointsMatrix.data[2][i]));
         renderPoints(beforePointsArray, "red")
         let afterPointsArray = [];
-        for(let i = 0; i < newSourcePointsMatrix.columns; i++)
-            afterPointsArray.push(new Vector3(newSourcePointsMatrix.data[0][i],newSourcePointsMatrix.data[1][i],newSourcePointsMatrix.data[2][i]));
+        for(let i = 0; i < sourceMatrix.columns; i++)
+            afterPointsArray.push(new Vector3(sourceMatrix.data[0][i],sourceMatrix.data[1][i],sourceMatrix.data[2][i]));
         afterPointsObjects.push(renderPoints(afterPointsArray, "blue"));
         console.log(sourceMatrix.columns + " pointcloud points.");
 
@@ -428,6 +428,7 @@ export function testGetBestTransformation() {
 }
 
 function renderPoints(points, color) {
+    console.log(points,color);
     let pointsObject = new Points(
         new BufferGeometry().setFromPoints(points), 
         new PointsMaterial({color:color, size: 1, sizeAttenuation: false})
