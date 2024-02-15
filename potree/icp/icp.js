@@ -54,11 +54,9 @@ import { KDTree } from "./kdtree";
 // Tweakable. I am not sure the best parameters to set for these.
 function getOverallParameters() {
     return {
-        // Min and max (inclusive) depths to search in the pointcloud's octree. There is one set of iterations per depth. 
-        // Depth 0 is the root of the tree, and depths greater than the tree's depth just take the full tree.
-        minDepth: 0,
-        maxDepth: 3,
-        // At shallow depths, sometimes no or very few points will be selected from the source pointcloud, and the transformation will be inaccurate.
+        // A set of ICP iterations will be called a "depth". 
+        numDepths: 3,
+        // At earlier depths, sometimes no or very few points will be selected from the source pointcloud, and the transformation will be inaccurate.
         // This parameter specifies a minimum number of found source points. If it is not met, the algorithm will move to the next depth.
         minSamplePoints: 100,
         // If few points find neighbors, the transformation will be inaccurate.
@@ -67,19 +65,20 @@ function getOverallParameters() {
         // If many source points find only a few unique target points as neighbors, the transformation will be inaccurate.
         // This parameter specifies a minimum number of unique target point neighbors.
         minTargetMatches: 1,
+        // This number must be at least 1. The scale can only be multiplied or divided by this much at each depth of iterations.
+        // maxScalePerIteration: 1.1,
+        // This number must be at least 1. The scale can only be multiplied or divided by this much overall.
+        maxScaleChange: 100,
+        // Seed for distributed point sampling from the schematic.
+        schematicFirstSeed: 2000,
+        // The following parameters will change each depth, so they just have initial values of 0 that will be overwritten.
         convergenceFitness: 0,
         convergenceRMSE: 0,
         numIterations: 0,
         maxSampleDistance: 0,
         maxNeighborDistance: 0,
         schematicSampleCount: 0,
-        pointcloudSampleCount: 0,
-        // This number must be at least 1. The scale can only be multiplied or divided by this much at each depth of iterations.
-        // maxScalePerIteration: 1.1,
-        // This number must be at least 1. The scale can only be multiplied or divided by this much overall.
-        maxScaleChange: 100,
-        // Seed for distributed point sampling from the schematic.
-        schematicFirstSeed: 2000
+        pointcloudSampleCount: 0
     };
 }
 
@@ -89,7 +88,7 @@ function updateDepthParameters(depth,pointcloud,targetModel,parameters) {
     parameters.convergenceFitness = 0.01;
     parameters.convergenceRMSE = 0.01;
     // If no convergence is reached, increase the depth after this many iterations.
-    parameters.numIterations = 2*2**(parameters.maxDepth-depth+1);
+    parameters.numIterations = 2*2**(parameters.numDepths-depth+1);
     // The algorithm assumes the user roughly aligned the pointcloud on the schematic. After this alignment, points in the source pointcloud that are
     // farther than this distance from any points in the target scehmatic are considered irrelevant (this distance is measured before ICP's transformations)
     parameters.maxSampleDistance = 0.05 * Math.max(...(["x","y","z"].map(dim=>targetModel.geometry.boundingBox.max[dim] - targetModel.geometry.boundingBox.min[dim])));
@@ -133,7 +132,7 @@ export async function multiScaleICP(/*targetFilePath,*/ targetModel, sourcePoint
 
     let exhaustedPointsMatrix = new Mlmatrix(0,0);
     let unexhaustedNodes = [await getRootNode(sourcePointcloud)];
-    for(let depth = 0; depth <= parameters.maxDepth; depth++) {
+    for(let depth = 0; depth <= parameters.numDepths; depth++) {
         updateDepthParameters(depth,sourcePointcloud,targetModel,parameters);
 
         console.log("Obtaining points from the schematic mesh.");
@@ -151,7 +150,7 @@ export async function multiScaleICP(/*targetFilePath,*/ targetModel, sourcePoint
         filteringPrecomputedValues.squaredMaxDistance = parameters.maxSampleDistance ** 2;
         filteringPrecomputedValues.targetKdTree = targetKdTree;
         */
-        // Obtain the next depth of points from the pointcloud and add them to the transformable matrix.
+        // Obtain the next set of points from the pointcloud for this depth and add them to the transformable matrix.
         let newSourcePointsMatrix;
         [newSourcePointsMatrix, exhaustedPointsMatrix, unexhaustedNodes] = await getNPointsMatrix(parameters.pointcloudSampleCount, exhaustedPointsMatrix, unexhaustedNodes, 
             sourcePointcloud, filteringNodeFilterMethod, filteringPointFilterMethod, filteringPrecomputedValues);
@@ -169,10 +168,6 @@ export async function multiScaleICP(/*targetFilePath,*/ targetModel, sourcePoint
         console.log(sourceMatrix.columns + " pointcloud points.");
 
         // Skip the ICP iterations if there aren't enough points yet.
-        if(depth < parameters.minDepth) {
-            console.log("Not reached minDepth yet: proceeding to next depth.")
-            continue;
-        }
         if(sourceMatrix.columns < parameters.minSourcePoints) {
             console.log("Not enough pointcloud points: proceeding to next depth.");
             continue;
